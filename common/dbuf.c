@@ -36,7 +36,7 @@
 */
 
 #ifndef lint
-static  char sccsid[] = "@(#)dbuf.c	2.17 1/30/94 (C) 1990 Markku Savela";
+static  char sccsid[] = "@(#)dbuf.c	2.12 4/30/93 (C) 1990 Markku Savela";
 #endif
 
 #include <stdio.h>
@@ -65,7 +65,7 @@ static	dbufbuf	*freelist = NULL;
 */
 static dbufbuf *dbuf_alloc()
 {
-#if defined(VALLOC) && !defined(DEBUGMODE)
+#ifdef	VALLOC
 	Reg1	dbufbuf	*dbptr, *db2ptr;
 	Reg2	int	num;
 #else
@@ -73,18 +73,13 @@ static dbufbuf *dbuf_alloc()
 #endif
 
 	dbufalloc++;
-	if ((dbptr = freelist))
+	if (dbptr = freelist)
 	    {
 		freelist = freelist->next;
 		return dbptr;
 	    }
-	if (dbufalloc * DBUFSIZ > BUFFERPOOL)
-	    {
-		dbufalloc--;
-		return NULL;
-	    }
 
-#if defined(VALLOC) && !defined(DEBUGMODE)
+#ifdef	VALLOC
 # if defined(SOL20) || defined(_SC_PAGESIZE)
 	num = sysconf(_SC_PAGESIZE)/sizeof(dbufbuf);
 # else
@@ -138,7 +133,7 @@ dbuf *dyn;
 	while ((p = dyn->head) != NULL)
 	    {
 		dyn->head = p->next;
-		dbuf_free(p);
+		(void)free((char *)p);
 	    }
 	return -1;
     }
@@ -147,7 +142,7 @@ dbuf *dyn;
 int	dbuf_put(dyn, buf, length)
 dbuf	*dyn;
 char	*buf;
-int	length;
+Long	length;
 {
 	Reg1	dbufbuf	**h, *d;
 	Reg2	int	nbr, off;
@@ -205,7 +200,7 @@ int	*length;
 
 int	dbuf_delete(dyn,length)
 dbuf	*dyn;
-int	length;
+Long	length;
     {
 	dbufbuf *d;
 	int chunk;
@@ -234,13 +229,13 @@ int	length;
 	return 0;
     }
 
-int	dbuf_get(dyn, buf, length)
+Long	dbuf_get(dyn, buf, length)
 dbuf	*dyn;
 char	*buf;
-int	length;
+Long	length;
     {
 	int	moved = 0;
-	int	chunk;
+	Long	chunk;
 	char	*b;
 
 	while (length > 0 && (b = dbuf_map(dyn, &chunk)) != NULL)
@@ -257,10 +252,10 @@ int	length;
     }
 
 /*
-int	dbuf_copy(dyn, buf, length)
+Long	dbuf_copy(dyn, buf, length)
 dbuf	*dyn;
 register char	*buf;
-int	length;
+Long	length;
 {
 	register dbufbuf	*d = dyn->head;
 	register char	*s;
@@ -308,15 +303,13 @@ register int	length;
 	dbufbuf	*d;
 	register char	*s;
 	register int	dlen;
-	register int	i;
-	int	copy;
+	register Long	i;
+	Long	copy;
 
 getmsg_init:
 	d = dyn->head;
 	dlen = dyn->length;
 	i = DBUFSIZ - dyn->offset;
-	if (i <= 0)
-		return -1;
 	copy = 0;
 	if (d && dlen)
 		s = dyn->offset + d->data;
@@ -325,7 +318,7 @@ getmsg_init:
 
 	if (i > dlen)
 		i = dlen;
-	while (length > 0 && dlen > 0)
+	while (length > 0)
 	    {
 		dlen--;
 		if (*s == '\n' || *s == '\r')
@@ -345,7 +338,7 @@ getmsg_init:
 		length--;
 		if (!--i)
 		    {
-			if ((d = d->next))
+			if (d = d->next)
 			    {
 				s = d->data;
 				i = MIN(DBUFSIZ, dlen);

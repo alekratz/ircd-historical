@@ -19,7 +19,7 @@
 
 /*
  *        Author: Jarle Lyngaas
- *        E-mail: nmijl@alf.uib.no
+ *        E-mail: jarle@stud.cs.uit.no 
  *        On IRC: Wizible
  */
 
@@ -30,10 +30,9 @@
 #include <stdio.h>
 #include <time.h>
 #include "common.h"
-#include "sys.h"
 #include "h.h"
 
-#define VERSION "v2.1"
+#define VERSION "v1.8.2"
 
 #define NOTE_SAVE_FREQUENCY 30 /* Frequency of save time in minutes */
 #define NOTE_MAXSERVER_TIME 120 /* Max days for a request in the server */
@@ -42,9 +41,8 @@
 #define NOTE_MAXSERVER_WILDCARDS 200 /* Max number of server toname w.cards */
 #define NOTE_MAXUSER_WILDCARDS 5 /* Max number of user toname wildcards */
 
-#define MAX_DAYS_NO_USE_SPY 31 /* No match or no user on */
-#define SECONDS_WAITFOR_MODE 10
-#define LAST_CLIENTS 200 /* More than this on within prev. time gets secret */
+#define GET_CHANNEL_TIME 10
+#define LAST_CLIENTS 3000 /* Max join or sign on within GET_CHANNEL_TIME */    
 #define BUF_LEN 256
 #define MSG_LEN 512
 #define REALLOC_SIZE 1024
@@ -80,7 +78,7 @@
 #define FLAGS_NOT_QUEUE_REQUESTS (1<<29)
 #define FLAGS_NEWNICK_DISPLAYED (1<<30)
 
-#define DupNewString(x,y) if (!StrEq(x,y)) { MyFree(x); DupString(x,y); }  
+#define DupNewString(x,y) if (!StrEq(x,y)) { free(x); DupString(x,y); }  
 #define MyEq(x,y) (!myncmp(x,y,strlen(x)))
 #define Usermycmp(x,y) mycmp(x,y)
 #define Key(sptr) KeyFlags(sptr,-1)
@@ -88,10 +86,9 @@
 #define IsOperHere(sptr) (IsOper(sptr) && MyConnect(sptr))
 #define NULLCHAR ((char *)0)
 #define SPY_CTRLCHAR 13
-#define DummyChar '~'
 
 /* Using Message(msgclient) to get message part of *any* message
-   cause the spy function is an ugly hack saving log in this field - Jarle */
+   cause the spy function is an ugly hack saving log in this field... - Jarle */
 
 typedef struct MsgClient {
             char *fromnick, *fromname, *fromhost, *tonick,
@@ -112,8 +109,7 @@ static int note_mst = NOTE_MAXSERVER_TIME,
            max_wildcards,
            max_fromname,
            m_id = 0,
-           changes_to_save = 0,
-           buffer_overload = 0;
+           changes_to_save = 0;
 
 static long old_clock = 0, old_clock_request = 0;
 static aMsgClient **ToNameList, **FromNameList, **WildCardList;
@@ -121,15 +117,7 @@ extern aClient *client, *find_person(), *local[];
 extern int highest_fd;
 extern aChannel *channel;
 extern char *MyMalloc(), *MyRealloc(), *myctime();
-extern char *myctime();
 static char *ptr = "IRCnote", *note_save_filename_tmp, file_inited = 0;
-
-static char *UserName(sptr)
-aClient *sptr;
-{
- if (*(sptr->user->username) != DummyChar) return sptr->user->username;
-  else return sptr->user->username+1; 
-}
 
 static int numeric(string)
 char *string;
@@ -224,33 +212,6 @@ char field;
  return buf;
 }       
 
-static void update_spymsg(msgclient)
-aMsgClient *msgclient;
-{
- long clock, t;
- char *buf, *empty = "-", ctrlbuf[2], mbuf[MSG_LEN]; 
-
- time (&clock);
- mbuf[0] = 0; ctrlbuf[0] = SPY_CTRLCHAR; ctrlbuf[1] = 0;
-
- buf = get_msg(msgclient, 'n'); if (!*buf) buf = empty; 
- strcat(mbuf, buf); strcat(mbuf, ctrlbuf); 
- buf = get_msg(msgclient, 'u'); if (!*buf) buf = empty; 
- strcat(mbuf, buf); strcat(mbuf, ctrlbuf); 
- buf = get_msg(msgclient, 'h'); if (!*buf) buf = empty; 
- strcat(mbuf, buf); strcat(mbuf, ctrlbuf); 
- buf = get_msg(msgclient, 'r'); if (!*buf) buf = empty; 
- strcat(mbuf, buf); strcat(mbuf, ctrlbuf); 
- buf = get_msg(msgclient, '1'); if (!*buf) buf = empty; 
- strcat(mbuf, buf); strcat(mbuf, ctrlbuf); 
- strcat(mbuf, myitoa(clock-msgclient->time)); 
- strcat(mbuf, ctrlbuf); t = MSG_LEN - strlen(mbuf) - 10;
- strncat(mbuf, clean_spychar(Message(msgclient)), t);
- strcat(mbuf, "\0");
- DupNewString(msgclient->message, mbuf);
- changes_to_save = 1;
-}
-
 static char *wildcards(string)
 char *string;
 {
@@ -336,6 +297,26 @@ static int number_fromname()
  return nr;         
 }
 
+static int strcasecmp(s1, s2)
+char *s1, *s2;
+{
+ static unsigned char charmap[256];
+ register unsigned char *cm = charmap, *us1 = (unsigned char *)s1,
+                        *us2 = (unsigned char *)s2;
+ static int generated = 0;
+ register int t = 0, t1 = 0;
+
+ if (!generated) {
+     generated = 1;while (t < 65) charmap[t++] = t1++;
+     t1 = 97;while (t < 91) charmap[t++] = t1++;
+     t1 = 91;while (t < 193) charmap[t++] = t1++;
+     t1 = 225;while (t < 219) charmap[t++] = t1++;
+     t1 = 219;while (t < 256) charmap[t++] = t1++;
+   }
+ while (cm[*us1] == cm[*us2++])
+        if (*us1++ == '\0') return 0;
+ return (int)(cm[*us1] - cm[*--us2]);
+}
 
 static int first_tnl_indexnode(name)
 char *name;
@@ -347,7 +328,7 @@ char *name;
  while ((s = (b+t) >> 1) != b) {
        msgclient = ToNameList[s];
        tname = (msgclient->flags & FLAGS_NAME) ? 1 : 0;
-       if (mycmp(tname ? msgclient->toname : msgclient->tonick, name) < 0)
+       if (strcasecmp(tname ? msgclient->toname : msgclient->tonick, name) < 0)
         b = s; else t = s;
   }
  return t;
@@ -363,7 +344,7 @@ char *name;
  while ((s = (b+t) >> 1) != b) {
        msgclient = ToNameList[s];
        tname = (msgclient->flags & FLAGS_NAME) ? 1 : 0;
-       if (mycmp(tname ? msgclient->toname : msgclient->tonick, name) > 0)
+       if (strcasecmp(tname ? msgclient->toname : msgclient->tonick, name) > 0)
         t = s; else b = s;
    }
  return b;
@@ -376,7 +357,7 @@ char *fromname;
 
  if (!t) return 0;
  while ((s = (b+t) >> 1) != b)
-       if (mycmp(FromNameList[s]->fromname,fromname)<0) b = s; else t = s;
+       if (strcasecmp(FromNameList[s]->fromname,fromname)<0) b = s; else t = s;
  return t;
 }
 
@@ -387,7 +368,7 @@ char *fromname;
 
  if (!t) return 0;
  while ((s = (b+t) >> 1) != b)
-       if (mycmp(FromNameList[s]->fromname,fromname)>0) t = s; else b = s;
+       if (strcasecmp(FromNameList[s]->fromname,fromname)>0) t = s; else b = s;
  return b;
 }
 
@@ -427,8 +408,8 @@ aMsgClient *msgclient;
  return 0;
 } 
  
-static aMsgClient *new(passwd,fromnick,fromname,fromhost,tonick,
-                       toname,tohost,flags,timeout,time,message)
+static void new(passwd,fromnick,fromname,fromhost,tonick,
+                toname,tohost,flags,timeout,time,message)
 char *passwd,*fromnick,*fromname,*fromhost,
      *tonick,*toname,*tohost,*message;
 long timeout,time,flags;
@@ -438,7 +419,7 @@ long timeout,time,flags;
  int allocate,first,last,n;
  aMsgClient *msgclient;
             
- if (number_fromname() > note_msm) return NULL; 
+ if (number_fromname() > note_msm) return; 
  if (fromname_index == max_fromname-1) {
     max_fromname += REALLOC_SIZE;
     allocate = max_fromname*sizeof(FromNameList)+1;
@@ -488,10 +469,10 @@ long timeout,time,flags;
  last = last_fnl_indexnode(fromname);
  if (!(n = first)) n = 1;
  index_p = FromNameList+n;
- while (n <= last && mycmp(msgclient->fromhost,(*index_p)->fromhost)>0) {
+ while (n <= last && strcasecmp(msgclient->fromhost,(*index_p)->fromhost)>0) {
         index_p++;n++;
    }
- while (n <= last && mycmp(msgclient->fromnick,(*index_p)->fromnick)>=0){ 
+ while (n <= last && strcasecmp(msgclient->fromnick,(*index_p)->fromnick)>=0){ 
         index_p++;n++;
    }
  index_p = FromNameList+fromname_index;
@@ -502,7 +483,6 @@ long timeout,time,flags;
  FromNameList[n] = msgclient;
  changes_to_save = 1;
  msgclient->id = ++m_id;
- return msgclient;
 }
 
 static void r_code(string,fp)
@@ -514,6 +494,7 @@ register FILE *fp;
 
  do {
       if ((v = getc(fp)) == EOF) {
+         debug(DEBUG_FATAL,"Corrupt file format: %s", NPATH);
          exit(-1);       
        }
       c = v;
@@ -596,7 +577,7 @@ static void init_messages()
         r_code(buf,fp);timeout = atol(buf);r_code(buf,fp);
         atime = atol(buf);r_code(message,fp);
         flags &= ~FLAGS_FROM_REG;
-        if (clock > 0 && *toname != DummyChar && *fromname != DummyChar)  
+        if (clock < timeout)  
             new(passwd,fromnick,fromname,fromhost,tonick,toname,
                 tohost,flags,timeout,atime,message);
   }
@@ -783,7 +764,7 @@ int id;
 {
  if (msgclient->flags == flags 
      && (!id || id == msgclient->id)
-     && !Usermycmp(UserName(sptr),msgclient->fromname)
+     && !Usermycmp(sptr->user->username,msgclient->fromname)
      && (!mycmp(sptr->name, msgclient->fromnick)
          || wild_fromnick(sptr->name, msgclient))
      && (!time_l || msgclient->time >= time_l 
@@ -888,15 +869,15 @@ aMsgClient *msgclient;
    }
  FromNameList[fromname_index] = 0;
  fromname_index--;
- MyFree(msgclient->passwd);
- MyFree(msgclient->fromnick);
- MyFree(msgclient->fromname);
- MyFree(msgclient->fromhost);
- MyFree(msgclient->tonick);
- MyFree(msgclient->toname);
- MyFree(msgclient->tohost);
- MyFree(msgclient->message);
- MyFree((char *)msgclient);
+ free(msgclient->passwd);
+ free(msgclient->fromnick);
+ free(msgclient->fromname);
+ free(msgclient->fromhost);
+ free(msgclient->tonick);
+ free(msgclient->toname);
+ free(msgclient->tohost);
+ free(msgclient->message);
+ free((char *)msgclient);
  changes_to_save = 1;
  if (max_fromname - fromname_index > REALLOC_SIZE *2) {
     max_fromname -= REALLOC_SIZE; 
@@ -925,8 +906,8 @@ long flags;
  
  t = first_tnl_indexnode(sptr->name);
  last = last_tnl_indexnode(sptr->name);
- first_tnl = first_tnl_indexnode(UserName(sptr));
- last_tnl = last_tnl_indexnode(UserName(sptr));
+ first_tnl = first_tnl_indexnode(sptr->user->username);
+ last_tnl = last_tnl_indexnode(sptr->user->username);
  index_p = ToNameList;
  time (&clock);
  while (1) {
@@ -935,7 +916,7 @@ long flags;
 	    if (msgclient->flags & FLAGS_KEY_TO_OPEN_OPER_LOCKS
 		&& msgclient->flags & flags
 		&& !matches(msgclient->tonick,sptr->name)
-		&& !matches(msgclient->toname,UserName(sptr))
+		&& !matches(msgclient->toname,sptr->user->username)
 		&& !matches(msgclient->tohost,sptr->user->host)) return 1;
             t++;
 	}
@@ -1113,32 +1094,17 @@ void save_messages()
 {
  aMsgClient *msgclient;
  long clock, gflags = 0;
- static long t2 = MAX_DAYS_NO_USE_SPY*3600*24;
  FILE *fp,*fopen();
  int t = 1;
  char *c, mbuf[MSG_LEN], dibuf[40];
 
- if (!file_inited || !changes_to_save) return;
+ if (!file_inited) return;
  time(&clock);
  gflags |= FLAGS_WASOPER; gflags |= FLAGS_NAME;
  gflags |= FLAGS_SERVER_GENERATED_NOTICE;
 
  while (fromname_index && t <= fromname_index) {
-        msgclient = FromNameList[t];
-        if (msgclient->flags & FLAGS_DISPLAY_IF_DEST_REGISTER) {
-            *mbuf = '\0';
-            while (!*mbuf) {
-                   strcpy(mbuf, get_msg(msgclient, '2'));
-                   if (!*mbuf) update_spymsg(msgclient);
-	      }
-            if (*get_msg(msgclient, 'n') == '-') {
-              if (clock > msgclient->time + t2)
-                  msgclient->timeout = 0; 
-	    } else {
-                     if (clock > msgclient->time + t2 + atoi(mbuf))
-                         msgclient->timeout = 0;
-                } 
-        }       
+       msgclient = FromNameList[t];
        if (clock > msgclient->timeout) {
            display_flags(msgclient->flags, dibuf, 'q');
            sprintf(mbuf,"Expired: /Note User -%d %s %s!%s@%s %s", 
@@ -1157,7 +1123,7 @@ void save_messages()
         }  
        t++;
    }
- changes_to_save = 0;
+ if (changes_to_save) changes_to_save = 0; else return;
  fp = fopen(note_save_filename_tmp,"w");
  if (!fp) {
     sendto_ops("Can't open for write: %s", NPATH);
@@ -1212,7 +1178,7 @@ aMsgClient *msgclient;
  if (!(msgclient->flags & FLAGS_ON_THIS_SERVER) 
        && msgclient->flags & FLAGS_SEND_ONLY_IF_THIS_SERVER
      || (msgclient->flags & FLAGS_SEND_ONLY_IF_NICK_NOT_NAME 
-         && mode == 'v' && StrEq(nick,UserName(sptr)))
+         && mode == 'v' && StrEq(nick,sptr->user->username))
      || (!IsOper(sptr) &&
          msgclient->flags & FLAGS_SEND_ONLY_IF_DESTINATION_OPER)
      || (mode == 'v' || mode == 'j' || mode == 'l') && qptr == aptr) 
@@ -1236,7 +1202,7 @@ aMsgClient *msgclient;
            }
          if (!*c++) return message;
          t1 += t;ebuf[t] = 0;
-         if (matches(ebuf,UserName(sptr))) exception = 0;
+         if (matches(ebuf,sptr->user->username)) exception = 0;
          t=0;ebuf[0] = 0;
          if (*c == ' ') return message;
          while (*c && *c != ' ') {
@@ -1262,8 +1228,8 @@ aChannel *sptr_chn;
  char *c, mbuf[MSG_LEN], buf[BUF_LEN], ebuf[BUF_LEN], *message, 
       wmode[2], *spy_channel = NULLCHAR, *spy_server = NULLCHAR;
  long clock, gflags;
- int t, t1, t2, last, secret = 1, send = 1, right_tonick = 0, 
-     show_channel = 0, sptr_chn_exits = 0;
+ int t, t1, t2, last, secret = 1, send = 1, hidden = 0,
+     right_tonick = 0, show_channel = 0, sptr_chn_exits = 0;
  aMsgClient *fmsgclient;
  aChannel *chptr;
  Link *link;
@@ -1274,7 +1240,7 @@ aChannel *sptr_chn;
             if (qptr->user && 
                 (!mycmp(qptr->name,msgclient->fromnick)
                 || wild_fromnick(qptr->name, msgclient))
-                && !Usermycmp(UserName(qptr),msgclient->fromname)
+                && !Usermycmp(qptr->user->username,msgclient->fromname)
                 && host_check(qptr->user->host,msgclient->fromhost)) 
                 break; 
     if (!qptr) msgclient->flags &= ~FLAGS_FROM_REG;
@@ -1285,7 +1251,7 @@ aChannel *sptr_chn;
  if (secret && !IsInvisible(sptr)) 
   for (link = sptr->user->channel; link; link = link->next)
        if (!SecretChannel(link->value.chptr)) secret = 0;
- if (mode == 'a' || buffer_overload) secret = 1;
+ if (secret || mode == 'a') hidden = 1; 
  wmode[1] = 0; *repeat = 0; *gnew = 0; 
 
  if (!send_flag(msgclient->flags)) send = 0; 
@@ -1298,24 +1264,19 @@ aChannel *sptr_chn;
   }
  message = flag_send(aptr, sptr, qptr, nick, msgclient, mode, sptr_chn);
  if (!message
-     || (msgclient->flags & FLAGS_SERVER_GENERATED_NOTICE) && 
-        (mode != 'a' && mode != 'v')
      || msgclient->flags & FLAGS_SEND_ONLY_IF_SENDER_ON_IRC && !qptr) { 
     *repeat = 1; return NULLCHAR; 
   }
- if ((!secret || right_tonick) 
+ if ((!hidden || right_tonick) 
      && msgclient->flags & FLAGS_DISPLAY_IF_DEST_REGISTER) {
      time(&clock);
+     clock -= msgclient->time;
      mbuf[0] = 0; buf[0] = SPY_CTRLCHAR; buf[1] = 0;
      strcat(mbuf, clean_spychar(nick)); strcat(mbuf, buf);
-     strcat(mbuf, clean_spychar(UserName(sptr))); strcat(mbuf, buf);
+     strcat(mbuf, clean_spychar(sptr->user->username)); strcat(mbuf, buf);
      strcat(mbuf, clean_spychar(sptr->user->host)); strcat(mbuf, buf);
      strcat(mbuf, clean_spychar(sptr->info)); strcat(mbuf, buf);
-     strcat(mbuf, myitoa(clock-msgclient->time)); strcat(mbuf, buf);
-     if (*get_msg(msgclient, '2'))
-        strcat(mbuf, get_msg(msgclient, '2')); 
-      else strcat(mbuf, myitoa(clock-msgclient->time));
-     strcat(mbuf, buf);
+     strcat(mbuf, myitoa(clock)); strcat(mbuf, buf);
      t = MSG_LEN - strlen(mbuf) - 10;
      strncat(mbuf, clean_spychar(Message(msgclient)), t);
      strcat(mbuf, "\0");
@@ -1326,8 +1287,8 @@ aChannel *sptr_chn;
  if (msgclient->flags & FLAGS_DISPLAY_IF_DEST_REGISTER
      && qptr && qptr != sptr) {
      time(&clock);
-     t = first_fnl_indexnode(UserName(qptr));
-     last = last_fnl_indexnode(UserName(qptr));
+     t = first_fnl_indexnode(qptr->user->username);
+     last = last_fnl_indexnode(qptr->user->username);
      while (last && t <= last) {
             fmsgclient = FromNameList[t];
             if (fmsgclient->flags & FLAGS_DISPLAY_IF_DEST_REGISTER
@@ -1337,10 +1298,10 @@ aChannel *sptr_chn;
                     fmsgclient->fromnick)
                    || wild_fromnick(mode == 'g' ? qptr_nick :qptr->name,
                                     fmsgclient))
-                && !Usermycmp(UserName(qptr), fmsgclient->fromname)
+                && !Usermycmp(qptr->user->username, fmsgclient->fromname)
                 && host_check(qptr->user->host, fmsgclient->fromhost)
                 && !matches(fmsgclient->tonick, nick)
-                && !matches(fmsgclient->toname, UserName(sptr))
+                && !matches(fmsgclient->toname, sptr->user->username)
                 && !matches(fmsgclient->tohost, sptr->user->host)
                 && flag_send(aptr, sptr, qptr, nick, fmsgclient, 
                              mode, sptr_chn)) {
@@ -1398,7 +1359,7 @@ aChannel *sptr_chn;
             while (*message && *message != ' ') message++;
             if (*message) message++;
 	}
-      sprintf(buf,"%s@%s",UserName(sptr),sptr->user->host);
+      sprintf(buf,"%s@%s",sptr->user->username,sptr->user->host);
       switch (mode) {
         case 'm' :
         case 'l' :
@@ -1419,7 +1380,7 @@ aChannel *sptr_chn;
 			}
                     break;
         case 'v' :
-  	case 'a' : if (!secret || right_tonick) {
+  	case 'a' : if (!hidden || right_tonick) {
                        sendto_one(qptr,
                                   "NOTICE %s :### %s (%s) %s%s %s",
                                   qptr->name, nick, buf, 
@@ -1480,8 +1441,8 @@ aChannel *sptr_chn;
       }
         end_this_flag:;
  }
-
- if (send && !right_tonick && secret
+ if (send && secret 
+     && mycmp(msgclient->tonick, sptr->name)
      && !(msgclient->flags & FLAGS_SERVER_GENERATED_NOTICE)
      && !(msgclient->flags & FLAGS_FIND_CORRECT_DEST_SEND_ONCE)) {
      if (mode == 'v') nick = msgclient->tonick;
@@ -1495,14 +1456,13 @@ aChannel *sptr_chn;
  while (mode != 'g' && (msgclient->flags & FLAGS_RETURN_CORRECT_DESTINATION
         || msgclient->flags & FLAGS_DISPLAY_IF_CORRECT_FOUND)) {
         if (*message && matches(message, sptr->info) || 
-            secret && !right_tonick) {
+            hidden && !right_tonick) {
            *repeat = 1; break;
 	 }
-        time(&clock); 
         sprintf(mbuf,"Search for %s!%s@%s (%s): %s!%s@%s (%s)",
                 msgclient->tonick,msgclient->toname,msgclient->tohost,
                 *message ? message : "*", nick,
-                UserName(sptr),sptr->user->host,sptr->info);
+                sptr->user->username,sptr->user->host,sptr->info);
         if (msgclient->flags & FLAGS_DISPLAY_IF_CORRECT_FOUND && qptr) {
             sendto_one(qptr,"NOTICE %s :### %s",qptr->name,mbuf);
             break;
@@ -1511,20 +1471,19 @@ aChannel *sptr_chn;
         t = first_tnl_indexnode(msgclient->fromname);
         last = last_tnl_indexnode(msgclient->fromname);
         while (last && t <= last) {
-              if (ToNameList[t]->timeout > clock &&
-                  ToNameList[t]->flags & FLAGS_SERVER_GENERATED_NOTICE &&
+              if (ToNameList[t]->flags & FLAGS_SERVER_GENERATED_NOTICE &&
                   !Usermycmp(ToNameList[t]->toname, msgclient->fromname) &&
                   !mycmp(ToNameList[t]->tohost,
                          local_host(msgclient->fromhost))) {
                   t1++;
                   if (!mycmp(Message(ToNameList[t]),mbuf)) {
-                     t1 = -1; break;
+                     t1 = note_mum; break;
 		   }
 	       }	  
               t++;
           }  
-        if (t1 < 0) break;
-        if (t1 > 10) {
+        time(&clock); 
+        if (t1 >= note_mum) {
             msgclient->timeout = clock-1; 
             break;
 	 }
@@ -1534,25 +1493,21 @@ aChannel *sptr_chn;
         gflags |= FLAGS_SERVER_GENERATED_NOTICE;
         *gnew = 1;
         c = wild_fromnick(msgclient->fromnick, msgclient);
-        new(msgclient->passwd,"SERVER_F","-","-",
+        new(msgclient->passwd,"SERVER","-","-",
             c ? c : msgclient->fromnick, msgclient->fromname,
             local_host(msgclient->fromhost), gflags, 
             24*7*3600+clock, clock, mbuf);
         break;
   }
-if (msgclient->flags & FLAGS_REPEAT_UNTIL_TIMEOUT) *repeat = 1;
- 
-while (send && qptr != sptr &&
+ if (msgclient->flags & FLAGS_REPEAT_UNTIL_TIMEOUT) *repeat = 1;
+ while (send && qptr != sptr &&
         (msgclient->flags & FLAGS_NOTICE_RECEIVED_MESSAGE
          || msgclient->flags & FLAGS_DISPLAY_IF_RECEIVED)) {
         time(&clock);
-        if (!right_tonick && secret && clock-msgclient->time < 3600*24*7)
-	   { *repeat = 1; send = 0; break; }
         sprintf(buf,"%s (%s@%s) has received note queued %s before delivery.",
-                nick, UserName(sptr), sptr->user->host,
+                nick, sptr->user->username, sptr->user->host,
                 mytime(msgclient->time));
-        if (msgclient->flags & FLAGS_DISPLAY_IF_RECEIVED && 
-            qptr && (right_tonick || !secret)) {
+        if (msgclient->flags & FLAGS_DISPLAY_IF_RECEIVED && qptr) {
            sendto_one(qptr,"NOTICE %s :### %s", qptr->name, buf);
            break;
          }
@@ -1571,8 +1526,8 @@ while (send && qptr != sptr &&
         if (mode == 'g') {
             *repeat = 1; send = 0; break;
 	  }
-        t = first_tnl_indexnode(UserName(sptr));
-        last = last_tnl_indexnode(UserName(sptr));
+        t = first_tnl_indexnode(sptr->user->username);
+        last = last_tnl_indexnode(sptr->user->username);
         while (last && t <= last) {
              if (ToNameList[t]->flags & FLAGS_SERVER_GENERATED_DESTINATION
                  && (!mycmp(ToNameList[t]->fromnick,msgclient->fromnick)
@@ -1581,7 +1536,7 @@ while (send && qptr != sptr &&
                  && host_check(ToNameList[t]->fromhost,msgclient->fromhost)
                  && (!(msgclient->flags & FLAGS_REGISTER_NEWNICK) 
                      || !mycmp(ToNameList[t]->tonick,nick))
-                 && !Usermycmp(ToNameList[t]->toname,UserName(sptr))
+                 && !Usermycmp(ToNameList[t]->toname,sptr->user->username)
                  && host_check(ToNameList[t]->tohost,sptr->user->host)) {
                  send = 0; break;
              }
@@ -1599,7 +1554,7 @@ while (send && qptr != sptr &&
         if (msgclient->flags & FLAGS_WASOPER) gflags |= FLAGS_WASOPER;
         time(&clock); *gnew = 1;
         new(msgclient->passwd,msgclient->fromnick, msgclient->fromname,
-            msgclient->fromhost,nick,UserName(sptr),
+            msgclient->fromhost,nick,sptr->user->username,
             sptr->user->host,gflags,msgclient->timeout,clock,"");
         break;
    }
@@ -1635,21 +1590,18 @@ char mode;
  time(&clock);
  if (!fromname_index) return;
  if (mode != 'j' && mode != 'l') {
-     t = first_fnl_indexnode(UserName(sptr));
-     last = last_fnl_indexnode(UserName(sptr));
+     t = first_fnl_indexnode(sptr->user->username);
+     last = last_fnl_indexnode(sptr->user->username);
      while (last && t <= last) {
            msgclient = FromNameList[t];
            if (!host_check(msgclient->fromhost, sptr->user->host)) {
                t++; continue;
             }
-           if (!mycmp(qptr_nick, msgclient->fromnick)
-               || wild_fromnick(qptr_nick, msgclient)) {
-               if (msgclient->flags & FLAGS_DISPLAY_IF_DEST_REGISTER)
-                   update_spymsg(msgclient);
-               if ((mode == 'e' || mode == 'q')
-                   && msgclient->flags & FLAGS_SIGNOFF_REMOVE)
-                   msgclient->timeout = 0;
-	    }
+           if ((mode == 'e' || mode == 'q') &&
+               msgclient->flags & FLAGS_SIGNOFF_REMOVE
+               && (!mycmp(qptr_nick, msgclient->fromnick)
+                   || wild_fromnick(qptr_nick, msgclient)))
+               msgclient->timeout = 0;
            msgclient->flags |= FLAGS_FROM_REG;
            t++; 
         }
@@ -1664,14 +1616,14 @@ char mode;
      newnick = tonick;tonick = sptr->name;
    }
  if (mode != 'g') {
-     first_tnl = first_tnl_indexnode(UserName(sptr));
-     last_tnl = last_tnl_indexnode(UserName(sptr));
+     first_tnl = first_tnl_indexnode(sptr->user->username);
+     last_tnl = last_tnl_indexnode(sptr->user->username);
      first_tnil = first_tnl_indexnode(tonick);
      last_tnil = last_tnl_indexnode(tonick);
   }
  if (mode == 's' || mode == 'g') {
-     t = first_fnl_indexnode(UserName(sptr));
-     last = last_fnl_indexnode(UserName(sptr));
+     t = first_fnl_indexnode(sptr->user->username);
+     last = last_fnl_indexnode(sptr->user->username);
      index_p = FromNameList;
      sptr = client; /* Notice new sptr */
      while (sptr && (!sptr->user || !*sptr->name)) sptr = sptr->next;
@@ -1706,7 +1658,7 @@ char mode;
                    || (!nick_list && msgclient->flags & FLAGS_NAME)
                    || (nick_list && !(msgclient->flags & FLAGS_NAME)))
                && !matches(msgclient->tonick, tonick)
-               && !matches(msgclient->toname, UserName(sptr))
+               && !matches(msgclient->toname, sptr->user->username)
                && !matches(msgclient->tohost, sptr->user->host)
                && (mode != 's' && mode != 'g'
                    || (wild_fromnick(qptr_nick, msgclient)
@@ -1733,14 +1685,14 @@ char mode;
            if (!repeat) msgclient->timeout = 0;
            if (gnew) {
                if (mode != 'g') {
-                  first_tnl = first_tnl_indexnode(UserName(sptr));
-                  last_tnl = last_tnl_indexnode(UserName(sptr));
+                  first_tnl = first_tnl_indexnode(sptr->user->username);
+                  last_tnl = last_tnl_indexnode(sptr->user->username);
                   first_tnil = first_tnl_indexnode(tonick);
                   last_tnil = last_tnl_indexnode(tonick);
 		}
                if (mode == 's' || mode == 'g') {
                   t = fnl_msgclient(msgclient);
-                  last = last_fnl_indexnode(UserName(qptr));
+                  last = last_fnl_indexnode(qptr->user->username);
 		} else {
                          if (index_p == ToNameList) {
                              t = tnl_msgclient(msgclient);
@@ -1793,13 +1745,13 @@ aChannel *sptr_chn;
 {
   static aClient *client_list[LAST_CLIENTS + 1];
   static long max_last_client = -1, time_list[LAST_CLIENTS + 1], reset = 0;
-  static long last_check_time = 0;
   static char mode_list[LAST_CLIENTS + 1];
   static aChannel *chn_list[LAST_CLIENTS + 1];
   register aClient *sptr_exist, *last_client;
   register int t = 0, new = -1, multi_buffered = 0, ret = 1;
   register long longest_time = 0;
   register char b_mode;
+  static long last_check_time = 0;
 
  if (!reset) { 
     for (t = 0; t < LAST_CLIENTS; t++) client_list[t] = 0;
@@ -1835,7 +1787,7 @@ aChannel *sptr_chn;
      last_check_time = clock;
      for (t = 0; t <= max_last_client; t++)
          if (client_list[t] && 
-             (clock - time_list[t] > SECONDS_WAITFOR_MODE 
+             (clock - time_list[t] > GET_CHANNEL_TIME 
              || (client_list[t] == sptr && mode != 'j' 
                  && mode != 'l' && mode != 'o') 
              || t == new)) {
@@ -1843,14 +1795,12 @@ aChannel *sptr_chn;
              for (sptr_exist=client;sptr_exist;sptr_exist = sptr_exist->next)
              if (sptr_exist == last_client) break;
              if (sptr_exist) {
-                if (t == new) buffer_overload = 1;
                 if (mode_list[t] == 'j' || mode_list[t] == 'l')
                  check_messages(sptr ? sptr : client_list[t], client_list[t], 
                                 chn_list[t], mode_list[t]);
                  else check_messages(sptr ? sptr : client_list[t], 
                                      client_list[t], client_list[t]->name, 
                                      mode_list[t]);
-                 buffer_overload = 0;
               }
              client_list[t] = 0;
              if (max_last_client == t)
@@ -1889,8 +1839,8 @@ char *command, *par1, *par2, *par3;
   }
  if (!command) {
         delay = (long *) info;
-        if (*delay > SECONDS_WAITFOR_MODE) *delay = SECONDS_WAITFOR_MODE;
-        if (clock - last_call < SECONDS_WAITFOR_MODE) return;
+        if (*delay > GET_CHANNEL_TIME) *delay = GET_CHANNEL_TIME;
+        if (clock - last_call < GET_CHANNEL_TIME) return;
         last_call = clock;
         check_lastclient((aClient *)0, (char)'-', clock, (aChannel *)0);
         return;
@@ -1912,8 +1862,6 @@ char *command, *par1, *par2, *par3;
  if ((c = (char *)index(nick, '[')) != NULL) *c = '\0';
  if (mode == 'm' && (c = (char *)index(command, '+')) != NULL) par3 = c;
  if (mode == 'm' && (c = (char *)index(command, '-')) != NULL) par3 = c;
- if (mode == 'm' && (c = (char *)index(command, 'c')) != NULL) return;
- if (mode == 'j' && (c = (char *)index(command, '0')) != NULL) par2 = c+1;
 
  if (last_mode == mode && StrEq(last_nick, nick)) {
      if (mode == 'm') {
@@ -1932,7 +1880,7 @@ char *command, *par1, *par2, *par3;
  sptr = find_person(nick, (aClient *)NULL);
  if (!sptr) for (sptr = client; sptr; sptr = sptr->next)
                  if (StrEq(sptr->name, nick)) break;
- if (!sptr || !sptr->user || !IsRegisteredUser(sptr)) return;
+ if (!sptr || !sptr->user) return;
  if (mode != 'j' && mode != 'l' && mode != 'm') {
      if (check_lastclient(sptr, mode, clock, chptr) && mode != 'o')
          check_messages(sptr, sptr, mode == 'n' ? par2 : sptr->name, mode);
@@ -1988,8 +1936,8 @@ char *passwd, *flag_s, *id_s, *name, *time_s;
     }
  split(name, tonick, toname, tohost);
  if (id_s) id = atoi(id_s); else id = 0;
- t = first_fnl_indexnode(UserName(sptr));
- last = last_fnl_indexnode(UserName(sptr));
+ t = first_fnl_indexnode(sptr->user->username);
+ last = last_fnl_indexnode(sptr->user->username);
  time (&clock);
  while (last && t <= last) {
        msgclient = FromNameList[t]; flags = msgclient->flags;
@@ -2183,8 +2131,8 @@ char *passwd, *flag_s, *timeout_s, *name, *message;
  time (&clock);
  t = first_tnl_indexnode(sptr->name);
  last = last_tnl_indexnode(sptr->name);
- first_tnl = first_tnl_indexnode(UserName(sptr));
- last_tnl = last_tnl_indexnode(UserName(sptr));
+ first_tnl = first_tnl_indexnode(sptr->user->username);
+ last_tnl = last_tnl_indexnode(sptr->user->username);
  index_p = ToNameList;
  time (&clock);
  while (1) {
@@ -2196,7 +2144,7 @@ char *passwd, *flag_s, *timeout_s, *name, *message;
             if (msg && msgclient->flags & FLAGS_NOT_QUEUE_REQUESTS
 	        && !(msgclient->flags & FLAGS_KEY_TO_OPEN_OPER_LOCKS)
  	        && !matches(msgclient->tonick,sptr->name) 
- 	        && !matches(msgclient->toname,UserName(sptr))
+ 	        && !matches(msgclient->toname,sptr->user->username)
 	        && !matches(msgclient->tohost,sptr->user->host)) {
 		sendto_one(sptr,"NOTICE %s :### %s (%s@%s) %s %s",sptr->name,
 			   msgclient->fromnick,msgclient->fromname,
@@ -2247,20 +2195,14 @@ char *passwd, *flag_s, *timeout_s, *name, *message;
            return -1;
        }
   }
- if (*toname == DummyChar) {
-     sendto_one(sptr,
-                "NOTICE %s :#?# Please skip that first character in username",
-                sptr->name);
-     return -1;
-  }
- first = first_fnl_indexnode(UserName(sptr));
- last = last_fnl_indexnode(UserName(sptr));
+ first = first_fnl_indexnode(sptr->user->username);
+ last = last_fnl_indexnode(sptr->user->username);
  t = first;
  while (last && t <= last) {
         msgclient = FromNameList[t];
         if (clock > msgclient->timeout) { t++; continue; }
         if (!mycmp(sptr->name, msgclient->fromnick)
-            && !Usermycmp(UserName(sptr), msgclient->fromname)
+            && !Usermycmp(sptr->user->username, msgclient->fromname)
             && host_check(sptr->user->host, msgclient->fromhost)
             && StrEq(msgclient->tonick, tonick)
             && StrEq(msgclient->toname, toname)
@@ -2276,7 +2218,7 @@ char *passwd, *flag_s, *timeout_s, *name, *message;
   if (!join && !(flags & FLAGS_WASOPER) && !Key(sptr)) {
      time(&clock); t = first;
      while (last && t <= last) {
-         if (!Usermycmp(UserName(sptr),FromNameList[t]->fromname)) {
+         if (!Usermycmp(sptr->user->username,FromNameList[t]->fromname)) {
              if (host_check(sptr->user->host,FromNameList[t]->fromhost)) {
                  sent++;
                  if (wildcards(FromNameList[t]->tonick)
@@ -2314,11 +2256,11 @@ char *passwd, *flag_s, *timeout_s, *name, *message;
    }
  while ((send_flag(flags) || flags & FLAGS_DISPLAY_IF_DEST_REGISTER) &&
        wildcards(tonick) && wildcards(toname)) { 
-       if ((flags & FLAGS_WASOPER || Key(sptr)) && !valid_elements(tohost))
+       if (flags & FLAGS_WASOPER && !valid_elements(tohost))
           sendto_one(sptr, 
                      "NOTICE %s :#?# This matches more than one country.",
                      sptr->name);
-        else if (!(flags & FLAGS_WASOPER) && !Key(sptr) &&
+        else if (!(flags & FLAGS_WASOPER) &&
                  matches(local_host(sptr->user->host), tohost))
                  sendto_one(sptr, "NOTICE %s :#?# %s must be a local host.",
                             sptr->name, local_host(sptr->user->host));
@@ -2328,10 +2270,9 @@ char *passwd, *flag_s, *timeout_s, *name, *message;
  if (!join) {
      time(&clock);
      flags |= FLAGS_FROM_REG;
-     msgclient = new(passwd,sptr->name, UserName(sptr),  
-                     sptr->user->host, tonick, toname, tohost, flags, 
-                     timeout*3600+clock, clock, clean_spychar(message));
-     if (flags & FLAGS_DISPLAY_IF_DEST_REGISTER) update_spymsg(msgclient);
+     new(passwd,sptr->name, sptr->user->username, sptr->user->host,
+         tonick, toname, tohost, flags, timeout*3600+clock, clock,
+         clean_spychar(message));
   }
  display_flags(flags, dibuf, '-');
  sprintf(buf, "%s %s %s!%s@%s for %s",
@@ -2367,7 +2308,7 @@ char *passwd, *flag_s, *timeout_s, *name, *message;
  strncat(buf, message, msg_len); strcat(flag_s, "-RS");
  while (fromname_index && t <= fromname_index) {
         msgclient = FromNameList[t];
-        if (!Usermycmp(UserName(sptr), msgclient->fromname)
+        if (!Usermycmp(sptr->user->username, msgclient->fromname)
             && (!mycmp(sptr->name, msgclient->fromnick)
                 || wild_fromnick(sptr->name, msgclient)
             &&  host_check(sptr->user->host,msgclient->fromhost))) {
@@ -2378,7 +2319,7 @@ char *passwd, *flag_s, *timeout_s, *name, *message;
             && !(msgclient->flags & FLAGS_SERVER_GENERATED_DESTINATION)  
             && (msgclient->flags & FLAGS_NEWS
                 && !matches(msgclient->tonick, tonick)
-                && !matches(msgclient->toname, UserName(sptr))
+                && !matches(msgclient->toname, sptr->user->username)
                 && !matches(msgclient->tohost, sptr->user->host)
                 && (!matches(toname, msgclient->tonick)
                     || matches(toname, tonick)
@@ -2417,8 +2358,7 @@ aClient *sptr;
 char *arg, *passwd, *flag_s, *id_s, *name, *time_s;
 {
  aMsgClient *msgclient;
- int number = 0, t, last, ls = 0, count = 0, 
-     found = 0, log = 0, id, id_count = 0;
+ int number = 0, t, last, ls = 0, count = 0, log = 0, id, id_count = 0;
  long clock, flags = 0, time_l, time_queued;
  char tonick[BUF_LEN], toname[BUF_LEN], tohost[BUF_LEN],
       *message, buf[BUF_LEN], dibuf[40], mbuf[MSG_LEN], 
@@ -2426,8 +2366,7 @@ char *arg, *passwd, *flag_s, *id_s, *name, *time_s;
 
  if (MyEq(arg,"ls")) ls = 1; else
  if (MyEq(arg,"count")) count = 1; else
- if (MyEq(arg,"log")) log = 1; else
- if (MyEq(arg,"llog")) log = 3;
+ if (MyEq(arg,"log")) log = 1; 
   else {
          sendto_one(sptr,"NOTICE %s :#?# No such option: %s",sptr->name,arg); 
          return;
@@ -2445,8 +2384,8 @@ char *arg, *passwd, *flag_s, *id_s, *name, *time_s;
     }
  split(name, tonick, toname, tohost);
  if (id_s) id = atoi(id_s); else id = 0;
- t = first_fnl_indexnode(UserName(sptr));
- last = last_fnl_indexnode(UserName(sptr));
+ t = first_fnl_indexnode(sptr->user->username);
+ last = last_fnl_indexnode(sptr->user->username);
  time(&clock); 
  while (last && t <= last) {
         msgclient = FromNameList[t];
@@ -2456,60 +2395,44 @@ char *arg, *passwd, *flag_s, *id_s, *name, *time_s;
         set_flags(sptr,flag_s,&flags,'d',"");
         if (local_check(sptr,msgclient,passwd,flags,
                            tonick,toname,tohost,time_l,id)) {
-            message = Message(msgclient); number++;
+            message = Message(msgclient);
             if (ls == 2 && *message) message = dots;
             display_flags(msgclient->flags, dibuf, '-');
-            if (log) { 
-                if (!(msgclient->flags & FLAGS_DISPLAY_IF_DEST_REGISTER))
-                    { t++ ; continue; }
+            if (log) {
                 strcpy(mbuf, get_msg(msgclient, 'n'));
-                if (*mbuf == '-') *mbuf = '\0';
-                if (*mbuf) { 
-                   strcat(mbuf, "!");
-                   strcat(mbuf, get_msg(msgclient, 'u')); strcat(mbuf, "@");
-                   strcat(mbuf, get_msg(msgclient, 'h')); 
-                   time_queued = atoi(get_msg(msgclient, '1'))+msgclient->time;
-                 }
-                if (log == 1 || log == 3) {            
-                   found++;
-                   if (*mbuf) {
-                      strcat(mbuf, " (");
-                      strcat(mbuf, get_msg(msgclient, 'r')); strcat(mbuf, ")");
-                    } else {
-                             time_queued = clock;
-                             strcpy(mbuf, "<No matches yet>");
-		        }
+                if (!*mbuf) { t++ ; continue; }
+                strcat(mbuf, "!");
+                strcat(mbuf, get_msg(msgclient, 'u')); strcat(mbuf, "@");
+                strcat(mbuf, get_msg(msgclient, 'h')); 
+                time_queued = atoi(get_msg(msgclient, '1'))+msgclient->time;
+                if (log == 1) {            
+                   strcat(mbuf, " (");
+                   strcat(mbuf, get_msg(msgclient, 'r')); strcat(mbuf, ")");
                    sendto_one(sptr,"NOTICE %s :### %s: %s!%s@%s => %s", 
-                              sptr->name, log == 1 ? mytime(time_queued) :
-                              myctime(time_queued),
+                              sptr->name, mytime(time_queued),
                               msgclient->tonick, msgclient->toname, 
                               msgclient->tohost, mbuf); 
-	         } else if (*mbuf) {
-                            found++;
-                            sendto_one(sptr,"NOTICE %s :### %s: %s", 
-                                       sptr->name, 
-                                       log == 2 ? mytime(time_queued) :
-                                       myctime(time_queued), mbuf); 
-		        }
+	         } else 
+                     sendto_one(sptr,"NOTICE %s :### %s: %s", sptr->name, 
+                                mytime(time_queued), mbuf); 
 	      } else 
                  if (!count) {
-                    found++;
-                    sprintf(buf,"for %s", 
-                           relative_time(msgclient->timeout-clock));
-                    sendto_one(sptr,"NOTICE %s :#%d %s %s (%s@%s) %s: %s",
+                   sprintf(buf,"for %s", relative_time(msgclient->timeout-clock));
+                   sendto_one(sptr,"NOTICE %s :#%d %s %s (%s@%s) %s: %s",
                               sptr->name, msgclient->id, dibuf,
                               msgclient->tonick, msgclient->toname,
                               msgclient->tohost, buf, message);
-		 }
+             }
+            number++;
 	 }
        t++;
      }
- if (count) sendto_one(sptr,"NOTICE %s :### %s %s (%s@%s): %d",
-                       sptr->name,"Number of requests to",
-                       tonick ? tonick : "*", toname ? toname:"*",
-                       tohost ? tohost : "*", number);
-  else if (!found) sendto_one(sptr,"NOTICE %s :#?# No such %s", sptr->name,
-                              log ? "log(s)" : "request(s) found");
+ if (!number) sendto_one(sptr,"NOTICE %s :#?# No such %s", sptr->name,
+                         log ? "log(s)" : "request(s) found");
+  else if (count) sendto_one(sptr,"NOTICE %s :### %s %s (%s@%s): %d",
+                             sptr->name,"Number of requests to",
+                             tonick ? tonick : "*", toname ? toname:"*",
+                             tohost ? tohost : "*", number);
 }
 
 static void msg_flag(sptr, passwd, flag_s, id_s, name, newflag_s)
@@ -2530,8 +2453,8 @@ char *passwd, *flag_s, *id_s, *name, *newflag_s;
  if (!set_flags(sptr, newflag_s, &flags,'c',"in flag changes")) return;
  split(name, tonick, toname, tohost);
  if (id_s) id = atoi(id_s); else id = 0;
- t = first_fnl_indexnode(UserName(sptr));
- last = last_fnl_indexnode(UserName(sptr));
+ t = first_fnl_indexnode(sptr->user->username);
+ last = last_fnl_indexnode(sptr->user->username);
  time(&clock);
  while (last && t <= last) {
        msgclient = FromNameList[t];flags = msgclient->flags;
@@ -2624,13 +2547,13 @@ char *arg, *name, *time_s, *delete;
                 sptr->name);
   return;
  }
- t = first_fnl_indexnode(UserName(sptr));
- last = last_fnl_indexnode(UserName(sptr));
+ t = first_fnl_indexnode(sptr->user->username);
+ last = last_fnl_indexnode(sptr->user->username);
  time (&clock);
  while (last && t <= last) {
         msgclient = FromNameList[t];
         if (clock > msgclient->timeout) { t++; continue; }
-        if (!Usermycmp(UserName(sptr),msgclient->fromname)
+        if (!Usermycmp(sptr->user->username,msgclient->fromname)
             && (!nick || !mycmp(sptr->name,msgclient->fromnick))) {
             if (host_check(sptr->user->host,msgclient->fromhost)) { 
                 if (!count) 
@@ -2721,7 +2644,7 @@ aClient *sptr;
         msgclient = FromNameList[t];
         if (msgclient->flags & FLAGS_FIND_CORRECT_DEST_SEND_ONCE 
             && !matches(msgclient->tonick, sptr->name)
-            && !matches(msgclient->toname, UserName(sptr))
+            && !matches(msgclient->toname, sptr->user->username)
             && !matches(msgclient->tohost, sptr->user->host)
             && flag_send((aClient *)0, sptr, (aClient *)0, sptr->name, 
                          msgclient, '-', NULLCHAR)) {
@@ -2731,7 +2654,7 @@ aClient *sptr;
                        sptr->name, msgclient->tonick, msgclient->toname, 
                        msgclient->tohost);
             sprintf(buf,"%s (%s@%s) has deactivated your Note Wall...",
-                    sptr->name,UserName(sptr),sptr->user->host);
+                    sptr->name,sptr->user->username,sptr->user->host);
             c = wild_fromnick(msgclient->fromnick, msgclient);
             gflags |= FLAGS_WASOPER;
             gflags |= FLAGS_SERVER_GENERATED_NOTICE;
@@ -2885,8 +2808,7 @@ char *parv[];
                       timeout == default_timeout ? deft : timeout, 
                       name, msg);
   } else
- if (MyEq(option,"LS") || MyEq(option,"COUNT") 
-     || MyEq(option,"LOG") || MyEq(option,"LLOG")) {
+ if (MyEq(option,"LS") || MyEq(option,"COUNT") || MyEq(option,"LOG")) {
      name = buf1;if (name_len_error(sptr, name)) return 0;
      msg_list(sptr, option, passwd, flags, id, name, buf2);
    } else
@@ -2917,3 +2839,4 @@ char *parv[];
  return 0;
 }
 #endif
+

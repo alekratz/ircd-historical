@@ -22,7 +22,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)s_misc.c	2.42 3/1/94 (C) 1988 University of Oulu, \
+static  char sccsid[] = "@(#)s_misc.c	2.31 5/6/93 (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 
@@ -33,11 +33,10 @@ Computing Center and Jarkko Oikarinen";
 #include "numeric.h"
 #include <sys/stat.h>
 #include <fcntl.h>
-#if !defined(ULTRIX) && !defined(SGI) && !defined(sequent) && \
-    !defined(__convex__)
+#if !defined(ULTRIX) && !defined(SGI) && !defined(sequent)
 # include <sys/param.h>
 #endif
-#if defined(PCS) || defined(AIX) || defined(SVR3)
+#ifdef PCS
 # include <time.h>
 #endif
 #ifdef HPUX
@@ -200,55 +199,22 @@ int	showip;
 
 	if (MyConnect(sptr))
 	    {
-		if (IsUnixSocket(sptr))
-		    {
-			if (showip)
-				(void) sprintf(nbuf, "%s[%s]",
-					sptr->name, sptr->sockhost);
-			else
-				(void) sprintf(nbuf, "%s[%s]",
-					sptr->name, me.sockhost);
-		    }
+		if (showip)
+			(void)sprintf(nbuf, "%s[%s@%s.%u]",
+				sptr->name, sptr->username,
+				inetntoa((char *)&sptr->ip),
+				(unsigned int)sptr->port);
 		else
 		    {
-			if (showip)
-				(void)sprintf(nbuf, "%s[%s@%s.%u]",
-					sptr->name,
-					(!(sptr->flags & FLAGS_GOTID)) ? "" :
-					sptr->username,
-					inetntoa((char *)&sptr->ip),
-					(unsigned int)sptr->port);
+			if (mycmp(sptr->name, sptr->sockhost))
+				(void)sprintf(nbuf, "%s[%s]",
+					sptr->name, sptr->sockhost);
 			else
-			    {
-				if (mycmp(sptr->name, sptr->sockhost))
-					(void)sprintf(nbuf, "%s[%s]",
-						sptr->name, sptr->sockhost);
-				else
-					return sptr->name;
-			    }
+				return sptr->name;
 		    }
 		return nbuf;
 	    }
 	return sptr->name;
-}
-
-char	*get_client_host(cptr)
-aClient	*cptr;
-{
-	static char nbuf[HOSTLEN * 2 + USERLEN + 5];
-
-	if (!MyConnect(cptr))
-		return cptr->name;
-	if (!cptr->hostp)
-		return get_client_name(cptr, FALSE);
-	if (IsUnixSocket(cptr))
-		(void) sprintf(nbuf, "%s[%s]", cptr->name, me.name);
-	else
-		(void)sprintf(nbuf, "%s[%-.*s@%-.*s]",
-			cptr->name, USERLEN,
-			(!(cptr->flags & FLAGS_GOTID)) ? "" : cptr->username,
-			HOSTLEN, cptr->hostp->h_name);
-	return nbuf;
 }
 
 /*
@@ -260,7 +226,7 @@ Reg1	aClient	*cptr;
 Reg2	char	*host;
 {
 	Reg3	char	*s;
-	if ((s = (char *)index(host, '@')))
+	if (s = (char *)index(host, '@'))
 		s++;
 	else
 		s = host;
@@ -365,13 +331,11 @@ char	*comment;	/* Reason for the exit */
 		    (logfile = open(FNAME_USERLOG, O_WRONLY|O_APPEND)) != -1)
 		    {
 			(void)alarm(0);
-			(void)sprintf(linebuf,
-				"%s (%3d:%02d:%02d): %s@%s [%s]\n",
+			(void)sprintf(linebuf, "%s (%3d:%02d:%02d): %s@%s\n",
 				myctime(sptr->firsttime),
 				on_for / 3600, (on_for % 3600)/60,
 				on_for % 60,
-				sptr->user->username, sptr->user->host,
-				sptr->username);
+				sptr->user->username, sptr->user->host);
 			(void)alarm(3);
 			(void)write(logfile, linebuf, strlen(linebuf));
 			(void)alarm(0);
@@ -544,22 +508,30 @@ char	*comment;
 		*/
 		if (sptr->user)
 		    {
+			Reg1	Link	*tmp;
+
 			sendto_common_channels(sptr, ":%s QUIT :%s",
 						sptr->name, comment);
-
-			while ((lp = sptr->user->channel))
-				remove_user_from_channel(sptr,lp->value.chptr);
-
+			for (lp = sptr->user->channel; lp; lp = tmp)
+			    {
+				tmp = lp->next;
+				remove_user_from_channel(sptr,
+							 lp->value.chptr);
+				/* this is all that is needed here. */
+			    }
 			/* Clean up invitefield */
-			while ((lp = sptr->user->invited))
+			for (lp = sptr->user->invited; lp; lp = tmp)
+			    {
+				tmp = lp->next;
 				del_invite(sptr, lp->value.chptr);
 				/* again, this is all that is needed */
+			    }
 		    }
 	    }
 
 	/* Remove sptr from the client list */
 	if (del_from_client_hash_table(sptr->name, sptr) != 1)
-		Debug((DEBUG_ERROR, "%#x !in tab %s[%s] %#x %#x %#x %d %d %#x",
+		Debug((DEBUG_FATAL, "0x%x !in tab %s[%s] %x %x %x %d %d %x",
 			sptr, sptr->name,
 			sptr->from ? sptr->from->sockhost : "??host",
 			sptr->from, sptr->next, sptr->prev, sptr->fd,
@@ -615,68 +587,41 @@ char	*name;
 		    {
 			sp->is_sbs += acptr->sendB;
 			sp->is_sbr += acptr->receiveB;
-			sp->is_sks += acptr->sendK;
-			sp->is_skr += acptr->receiveK;
 			sp->is_sti += now - acptr->firsttime;
 			sp->is_sv++;
-			if (sp->is_sbs > 1023)
-			    {
-				sp->is_sks += (sp->is_sbs >> 10);
-				sp->is_sbs &= 0x3ff;
-			    }
-			if (sp->is_sbr > 1023)
-			    {
-				sp->is_skr += (sp->is_sbr >> 10);
-				sp->is_sbr &= 0x3ff;
-			    }
 		    }
 		else if (IsClient(acptr))
 		    {
 			sp->is_cbs += acptr->sendB;
 			sp->is_cbr += acptr->receiveB;
-			sp->is_cks += acptr->sendK;
-			sp->is_ckr += acptr->receiveK;
 			sp->is_cti += now - acptr->firsttime;
 			sp->is_cl++;
-			if (sp->is_cbs > 1023)
-			    {
-				sp->is_cks += (sp->is_cbs >> 10);
-				sp->is_cbs &= 0x3ff;
-			    }
-			if (sp->is_cbr > 1023)
-			    {
-				sp->is_ckr += (sp->is_cbr >> 10);
-				sp->is_cbr &= 0x3ff;
-			    }
 		    }
 		else if (IsUnknown(acptr))
 			sp->is_ni++;
 	    }
 
-	sendto_one(cptr, ":%s %d %s :accepts %u refused %u",
-		   me.name, RPL_STATSDEBUG, name, sp->is_ac, sp->is_ref);
-	sendto_one(cptr, ":%s %d %s :unknown commands %u prefixes %u",
-		   me.name, RPL_STATSDEBUG, name, sp->is_unco, sp->is_unpf);
-	sendto_one(cptr, ":%s %d %s :nick collisions %u unknown closes %u",
-		   me.name, RPL_STATSDEBUG, name, sp->is_kill, sp->is_ni);
-	sendto_one(cptr, ":%s %d %s :wrong direction %u empty %u",
-		   me.name, RPL_STATSDEBUG, name, sp->is_wrdi, sp->is_empt);
-	sendto_one(cptr, ":%s %d %s :numerics seen %u mode fakes %u",
-		   me.name, RPL_STATSDEBUG, name, sp->is_num, sp->is_fake);
-	sendto_one(cptr, ":%s %d %s :auth successes %u fails %u",
-		   me.name, RPL_STATSDEBUG, name, sp->is_asuc, sp->is_abad);
-	sendto_one(cptr, ":%s %d %s :local connections %u udp packets %u",
-		   me.name, RPL_STATSDEBUG, name, sp->is_loc, sp->is_udp);
-	sendto_one(cptr, ":%s %d %s :Client Server",
-		   me.name, RPL_STATSDEBUG, name);
-	sendto_one(cptr, ":%s %d %s :connected %u %u",
-		   me.name, RPL_STATSDEBUG, name, sp->is_cl, sp->is_sv);
-	sendto_one(cptr, ":%s %d %s :bytes sent %u.%uK %u.%uK",
-		   me.name, RPL_STATSDEBUG, name,
-		   sp->is_cks, sp->is_cbs, sp->is_sks, sp->is_sbs);
-	sendto_one(cptr, ":%s %d %s :bytes recv %u.%uK %u.%uK",
-		   me.name, RPL_STATSDEBUG, name,
-		   sp->is_ckr, sp->is_cbr, sp->is_skr, sp->is_sbr);
-	sendto_one(cptr, ":%s %d %s :time connected %u %u",
-		   me.name, RPL_STATSDEBUG, name, sp->is_cti, sp->is_sti);
+	sendto_one(cptr, ":%s NOTICE %s :accepts %u refused %u",
+		   me.name, name, sp->is_ac, sp->is_ref);
+	sendto_one(cptr, ":%s NOTICE %s :unknown commands %u prefixes %u",
+		   me.name, name, sp->is_unco, sp->is_unpf);
+	sendto_one(cptr, ":%s NOTICE %s :nick collisions %u unknown closes %u",
+		   me.name, name, sp->is_kill, sp->is_ni);
+	sendto_one(cptr, ":%s NOTICE %s :wrong direction %u empty %u",
+		   me.name, name, sp->is_wrdi, sp->is_empt);
+	sendto_one(cptr, ":%s NOTICE %s :numerics seen %u mode fakes %u",
+		   me.name, name, sp->is_num, sp->is_fake);
+	sendto_one(cptr, ":%s NOTICE %s :auth successes %u fails %u",
+		   me.name, name, sp->is_asuc, sp->is_abad);
+	sendto_one(cptr, ":%s NOTICE %s :local connections %u udp packets %u",
+		   me.name, name, sp->is_loc, sp->is_udp);
+	sendto_one(cptr, ":%s NOTICE %s :Client Server", me.name, name);
+	sendto_one(cptr, ":%s NOTICE %s :connected %u %u",
+		   me.name, name, sp->is_cl, sp->is_sv);
+	sendto_one(cptr, ":%s NOTICE %s :bytes sent %u %u",
+		   me.name, name, sp->is_cbs, sp->is_sbs);
+	sendto_one(cptr, ":%s NOTICE %s :bytes recv %u %u",
+		   me.name, name, sp->is_cbr, sp->is_sbr);
+	sendto_one(cptr, ":%s NOTICE %s :time connected %u %u",
+		   me.name, name, sp->is_cti, sp->is_sti);
 }

@@ -18,7 +18,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)s_auth.c	1.18 4/18/94 (C) 1992 Darren Reed";
+static  char sccsid[] = "@(#)s_auth.c	1.15 4/3/93 (C) 1992 Darren Reed";
 #endif
 
 #include "struct.h"
@@ -61,21 +61,11 @@ Reg1	aClient	*cptr;
 	    {
 #ifdef	USE_SYSLOG
 		syslog(LOG_ERR, "Unable to create auth socket for %s:%m",
-			get_client_name(cptr, TRUE));
+			get_client_name(cptr,TRUE));
 #endif
-		Debug((DEBUG_ERROR, "Unable to create auth socket for %s:%s",
-			get_client_name(cptr, TRUE),
-			strerror(get_sockerr(cptr))));
 		if (!DoingDNS(cptr))
 			SetAccess(cptr);
 		ircstp->is_abad++;
-		return;
-	    }
-	if (cptr->authfd >= (MAXCONNECTIONS-2))
-	    {
-		sendto_ops("Can't allocate fd for auth on %s",
-			   get_client_name(cptr, TRUE));
-		(void)close(cptr->authfd);
 		return;
 	    }
 
@@ -149,15 +139,14 @@ aClient	*cptr;
 authsenderr:
 		ircstp->is_abad++;
 		(void)close(cptr->authfd);
-		if (cptr->authfd == highest_fd)
-			while (!local[highest_fd])
-				highest_fd--;
 		cptr->authfd = -1;
-		cptr->flags &= ~FLAGS_AUTH;
+		cptr->flags &= ~(FLAGS_AUTH|FLAGS_WRAUTH);
 		if (!DoingDNS(cptr))
 			SetAccess(cptr);
+		return;
 	    }
 	cptr->flags &= ~FLAGS_WRAUTH;
+
 	return;
 }
 
@@ -173,10 +162,10 @@ Reg1	aClient	*cptr;
 {
 	Reg1	char	*s, *t;
 	Reg2	int	len;
-	char	ruser[USERLEN+1], system[8];
-	u_short	remp = 0, locp = 0;
+	char	ruser[USERLEN+1], tuser[USERLEN+1];
+	u_short	remote = 0, local = 0;
 
-	*system = *ruser = '\0';
+	*ruser = '\0';
 	Debug((DEBUG_NOTICE,"read_authports(%x) fd %d authfd %d stat %d",
 		cptr, cptr->fd, cptr->authfd, cptr->status));
 	/*
@@ -193,35 +182,24 @@ Reg1	aClient	*cptr;
 		cptr->buffer[cptr->count] = '\0';
 	    }
 
-	cptr->lasttime = time(NULL);
-	if ((len > 0) && (cptr->count != (sizeof(cptr->buffer) - 1)) &&
+	if ((len > 0) && (cptr->count != sizeof(cptr->buffer) - 1) &&
 	    (sscanf(cptr->buffer, "%hd , %hd : USERID : %*[^:]: %10s",
-		    &remp, &locp, ruser) == 3))
+		    &remote, &local, tuser) == 3) &&
+	    (s = rindex(cptr->buffer, ':')))
 	    {
-		s = rindex(cptr->buffer, ':');
-		*s++ = '\0';
-		for (t = (rindex(cptr->buffer, ':') + 1); *t; t++)
-			if (!isspace(*t))
-				break;
-		strncpyzt(system, t, sizeof(system));
-		for (t = ruser; *s && (t < ruser + sizeof(ruser)); s++)
+		for (++s, t = ruser; *s && (t < ruser + sizeof(ruser)); s++)
 			if (!isspace(*s) && *s != ':')
 				*t++ = *s;
 		*t = '\0';
-		Debug((DEBUG_INFO,"auth reply ok [%s] [%s]", system, ruser));
+		Debug((DEBUG_INFO,"auth reply ok"));
 	    }
 	else if (len != 0)
 	    {
-		if (!index(cptr->buffer, '\n') && !index(cptr->buffer, '\r'))
-			return;
-		Debug((DEBUG_ERROR,"local %d remote %d s %x", locp, remp, s));
+		Debug((DEBUG_ERROR,"local %d remote %d s %x",local,remote,s));
 		Debug((DEBUG_ERROR,"bad auth reply in [%s]", cptr->buffer));
 		*ruser = '\0';
 	    }
 	(void)close(cptr->authfd);
-	if (cptr->authfd == highest_fd)
-		while (!local[highest_fd])
-			highest_fd--;
 	cptr->count = 0;
 	cptr->authfd = -1;
 	ClearAuth(cptr);
@@ -230,15 +208,15 @@ Reg1	aClient	*cptr;
 	if (len > 0)
 		Debug((DEBUG_INFO,"ident reply: [%s]", cptr->buffer));
 
-	if (!locp || !remp || !*ruser)
+	if (!local || !remote || !*ruser)
 	    {
 		ircstp->is_abad++;
+		(void)strcpy(cptr->username, "unknown");
 		return;
 	    }
 	ircstp->is_asuc++;
 	strncpyzt(cptr->username, ruser, USERLEN+1);
-	if (strncmp(system, "OTHER", 5))
-		cptr->flags |= FLAGS_GOTID;
+	cptr->flags |= FLAGS_GOTID;
 	Debug((DEBUG_INFO, "got username [%s]", ruser));
 	return;
 }

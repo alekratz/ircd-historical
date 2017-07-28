@@ -22,18 +22,15 @@ char ignore_id[]="ignore.c v2.0 (c) 1988, 1989 Jarkko Oikarinen";
 #include "struct.h"
 #include "common.h"
 #include "sys.h"
-#include "irc.h"
 
 anIgnore *ignore = (anIgnore *) 0;
 char ibuf[80];
+extern anIgnore *find_ignore();
 
-int kill_ignore();
-int add_ignore();
-
-void do_ignore(user, temp)
+do_ignore(user, temp)
 char *user, *temp;
 {
-  char *ch, *wild = "*";
+  char *ch;
   anIgnore *iptr;
   char *apu = user, *uh;
   int status;
@@ -41,14 +38,14 @@ char *user, *temp;
 
     putline("*** Current ignore list entries:");
     for (iptr = ignore; iptr; iptr = iptr->next) {
-      sprintf(ibuf,"    Ignoring %s messages from user %s!%s", 
+      sprintf(ibuf,"    Ignoring %s messages from user %s", 
 	      (iptr->flags == IGNORE_TOTAL) ? "all" :
 	      (iptr->flags == IGNORE_PRIVATE) ? "private" : "public", 
-	      iptr->user, iptr->from);
+	      iptr->user);
       putline(ibuf);
     }
     putline("*** End of ignore list entries");
-    return;
+    return (0);
   }
   while (apu && *apu) {
     ch = apu;
@@ -62,17 +59,15 @@ char *user, *temp;
     }
     else 
       status = IGNORE_TOTAL;
-    if ((apu = index(ch, ',')))
+    if (apu = index(ch, ','))
       *(apu++) = '\0';
-    if ((uh = index(ch, '!')))
+    if (uh = index(ch, '!'))
       *uh++ = '\0';
-    else if ((uh = index(ch, '@')))
+    else if (uh = index(ch, '@'))
       *uh++ = '\0';
     else
-      uh = wild;
-    if (!*ch)
-      ch = wild;
-    if ((iptr = find_ignore(ch, (anIgnore *)NULL, uh))) {
+      uh = NULL;
+    if (iptr = find_ignore(ch, (anIgnore *)NULL, uh)) {
       sprintf(ibuf,"*** Ignore removed: user %s!%s",
       iptr->user, iptr->from);
       putline(ibuf);
@@ -81,14 +76,15 @@ char *user, *temp;
       if (strlen(ch) > (size_t) NICKLEN)
 	ch[NICKLEN] = '\0';
       if (add_ignore(ch, status, uh) >= 0) {
-	sprintf(ibuf,"*** Ignore %s messages from user %s!%s", 
+	sprintf(ibuf,"*** Ignore %s messages from user %s", 
 		(status == IGNORE_TOTAL) ? "all" :
-		 (status == IGNORE_PRIVATE) ? "private" : "public", ch, uh);
+		(status == IGNORE_PRIVATE) ? "private" : "public", ch);
 	putline(ibuf);
       } else
 	putline("Fatal Error: Cannot allocate memory for ignore buffer");
     }
   }
+  return (0);
 }    
 
 anIgnore *find_ignore(user, para, fromhost)
@@ -97,8 +93,8 @@ anIgnore *para;
 {
   anIgnore *iptr;
   for (iptr = ignore; iptr; iptr=iptr->next)
-    if ((matches(iptr->user, user) == 0) &&
-	(matches(iptr->from, fromhost)==0))
+    if ((myncmp(iptr->user, user, NICKLEN) == 0) &&
+	(!fromhost || !*fromhost || matches(iptr->from, fromhost)==0))
       break;
 
   return iptr ? iptr : para;
@@ -133,7 +129,10 @@ int status;
   if (iptr == (anIgnore *) 0)
     return(-1);
   strncpyzt(iptr->user, ch, sizeof(iptr->user));
-  strncpyzt(iptr->from, fromhost, sizeof(iptr->from));
+  if (fromhost && *fromhost)
+    strncpyzt(iptr->from, fromhost, sizeof(iptr->from));
+  else
+    strncpy(iptr->from, "*", sizeof(iptr->from));
   iptr->next = ignore;
   ignore = iptr;
   iptr->flags = status;

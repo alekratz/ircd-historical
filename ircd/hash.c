@@ -17,22 +17,23 @@
  *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 #ifndef lint
-static char sccsid[] = "@(#)hash.c	2.10 7/3/93 (C) 1991 Darren Reed";
+static char sccsid[] = "@(#)hash.c	2.8 3/27/93 (C) 1991 Darren Reed";
 #endif
 
 #include "struct.h"
 #include "common.h"
 #include "sys.h"
 #include "hash.h"
-#include "h.h"
+
+extern  char *MyMalloc();
+extern	aClient	*client;
+extern	aChannel	*channel;
 
 #ifdef	DEBUGMODE
 static	aHashEntry	*clientTable = NULL;
 static	aHashEntry	*channelTable = NULL;
 static	int	clhits, clmiss;
 static	int	chhits, chmiss;
-int	HASHSIZE = 2003;
-int	CHANNELHASHSIZE = 607;
 #else
 static	aHashEntry	clientTable[HASHSIZE];
 static	aHashEntry	channelTable[CHANNELHASHSIZE];
@@ -88,7 +89,13 @@ char	*nname;
 	Reg4	int	hash = 1, *tab;
 
 	for (tab = hash_mult; (ch = *name); name++, tab++)
+	    {
+#ifdef USE_OUR_CTYPE
 		hash += tolower(ch) + *tab + hash;
+#else
+		hash += (islower(ch) ? ch : tolower(ch)) + *tab + hash;
+#endif
+	    }
 	if (hash < 0)
 		hash = -hash;
 	hash %= HASHSIZE;
@@ -112,7 +119,13 @@ char	*hname;
 	Reg4	int	hash = 5, *tab;
 
 	for (tab = hash_mult; (ch = *name) && --i; name++, tab++)
+	    {
+#ifdef USE_OUR_CTYPE
 		hash += tolower(ch) + *tab + hash + i + i;
+#else
+		hash += (islower(ch) ? ch : tolower(ch)) + *tab + hash + i + i;
+#endif
+	    }
 	if (hash < 0)
 		hash = -hash;
 	hash %= CHANNELHASHSIZE;

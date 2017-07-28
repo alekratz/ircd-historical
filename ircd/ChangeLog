@@ -17,9 +17,6 @@
  *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-Sat Jun 26 09:31:07 1993
-	* all		2.8.10 released.
-
 Sun Apr 11 02:28:56 1993
 	* s_serv.c, s_user.c
 			Local Operator (o-lines) 'power' is now more flexible
@@ -540,10 +537,5 @@ Sat Jan  6 17:36:28 1990  Mike Bolotski  (mikeb at coho.ee.ubc.ca)
 	* date.c
 
 	Added HPUX-specific code since it lacks the timezone() function.
-
-Thu Oct 21 13:45:31 1993 Armin Gruner <gruner@informatik.tu-muenchen.de>
-
-      * s_conf.c, find_restrict. Added argv0 to execlp() call. login
-        name was not passed to external program
 
 

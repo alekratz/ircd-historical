@@ -35,7 +35,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)s_bsd.c	2.78 2/7/94 (C) 1988 University of Oulu, \
+static  char sccsid[] = "@(#)s_bsd.c	2.51 5/6/93 (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 
@@ -48,11 +48,7 @@ Computing Center and Jarkko Oikarinen";
 #include <sys/socket.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
-#if defined(SOL20)
-#include <sys/filio.h>
-#endif
-#if defined(UNIXPORT) && (!defined(SVR3) || defined(sgi) || \
-    defined(_SEQUENT_))
+#if defined(UNIXPORT) && (!defined(SVR3) || defined(sgi))
 # include <sys/un.h>
 #endif
 #include "inet.h"
@@ -60,9 +56,10 @@ Computing Center and Jarkko Oikarinen";
 #include <signal.h>
 #include <fcntl.h>
 #include <utmp.h>
-#include <sys/resource.h>
+#if defined(GETRUSAGE_2)
+# include <sys/resource.h>
+#endif
 #ifdef	AIX
-# include <time.h>
 # include <arpa/nameser.h>
 #else
 # include "nameser.h"
@@ -81,13 +78,12 @@ int	highest_fd = 0, readcalls = 0, udpfd = -1, resfd = -1;
 static	struct	sockaddr_in	mysk;
 static	void	polludp();
 
+static	struct	sockaddr *connect_unix PROTO((aConfItem *, aClient *, int *));
 static	struct	sockaddr *connect_inet PROTO((aConfItem *, aClient *, int *));
 static	int	completed_connection PROTO((aClient *));
-static	int	check_init PROTO((aClient *, char *));
 static	void	do_dns_async PROTO(()), set_sock_opts PROTO((int, aClient *));
-#ifdef	UNIXPORT
-static	struct	sockaddr *connect_unix PROTO((aConfItem *, aClient *, int *));
 static	void	add_unixconnection PROTO((aClient *, int));
+#ifdef	UNIXPORT
 static	char	unixpath[256];
 #endif
 static	char	readbuf[8192];
@@ -140,6 +136,17 @@ int	size;
 }
 
 /*
+** AcceptNewConnections
+**	If TRUE, select() will be enabled for the listening socket
+**	(me.fd). If FALSE, it's not enabled and new connections are
+**	not accepted. This is needed, because select() seems to
+**	return "may do accept" even if the process has run out of
+**	available file descriptors (fd's). Thus, the server goes
+**	into a loop: select() OK -> accept() FAILS :(
+*/
+static	int	AcceptNewConnections = TRUE;
+
+/*
 ** Cannot use perror() within daemon. stderr is closed in
 ** ircd and cannot be used. And, worse yet, it might have
 ** been reassigned to a normal connection...
@@ -176,12 +183,10 @@ aClient *cptr;
 	 * This may only work when SO_DEBUG is enabled but its worth the
 	 * gamble anyway.
 	 */
-#ifdef	SO_ERROR
 	if (!IsMe(cptr) && cptr->fd >= 0)
 		if (!getsockopt(cptr->fd, SOL_SOCKET, SO_ERROR, &err, &len))
-			if (err)
-				errtmp = err;
-#endif
+			errtmp = err;
+
 	sendto_ops(text, host, strerror(errtmp));
 #ifdef USE_SYSLOG
 	syslog(LOG_WARNING, text, host, strerror(errtmp));
@@ -232,7 +237,7 @@ int	port;
 		report_error("opening stream socket %s:%s", cptr);
 		return -1;
 	    }
-	else if (cptr->fd >= MAXCLIENTS)
+	else if (cptr->fd >= MAXCONNECTIONS)
 	    {
 		sendto_ops("No more connections allowed (%s)", cptr->name);
 		(void)close(cptr->fd);
@@ -280,10 +285,13 @@ int	port;
 	    }
 	if (cptr->fd > highest_fd)
 		highest_fd = cptr->fd;
+	SetMe(cptr);
 	cptr->ip.s_addr = inet_addr(ipname);
 	cptr->port = (int)ntohs(server.sin_port);
-	(void)listen(cptr->fd, 5);
+	cptr->from = cptr;
+	(void)listen(cptr->fd, 1);
 	local[cptr->fd] = cptr;
+	cptr->flags |= FLAGS_LISTEN;
 
 	return 0;
 }
@@ -294,37 +302,27 @@ int	port;
  * Create a new client which is essentially the stub like 'me' to be used
  * for a socket that is passive (listen'ing for connections to be accepted).
  */
-int	add_listener(aconf)
-aConfItem *aconf;
+int	add_listener(name, port)
+char	*name;
+int	port;
 {
 	aClient	*cptr;
 
-	cptr = make_client(NULL);
-	cptr->flags = FLAGS_LISTEN;
-	cptr->acpt = cptr;
-	cptr->from = cptr;
-	SetMe(cptr);
-	strncpyzt(cptr->name, aconf->host, sizeof(cptr->name));
 #ifdef	UNIXPORT
-	if (*aconf->host == '/')
+	if (*name == '/')
 	    {
-		if (unixport(cptr, aconf->host, aconf->port))
-			cptr->fd = -2;
+		cptr = make_client(NULL);
+		if (unixport(cptr, name, port))
+			(void)free((char *)cptr);
 	    }
 	else
 #endif
-		if (inetport(cptr, aconf->host, aconf->port))
-			cptr->fd = -2;
-
-	if (cptr->fd >= 0)
 	    {
-		cptr->confs = make_link();
-		cptr->confs->next = NULL;
-		cptr->confs->value.aconf = aconf;
-		set_non_blocking(cptr->fd, cptr);
+		cptr = make_client(NULL);
+		if (inetport(cptr, name, port))
+			(void)free((char *)cptr);
 	    }
-	else
-		free_client(cptr);
+	cptr->acpt = cptr;
 	return 0;
 }
 
@@ -350,21 +348,21 @@ int	port;
 		report_error("error opening unix domain socket %s:%s", cptr);
 		return -1;
 	    }
-	else if (cptr->fd >= MAXCLIENTS)
+	else if (cptr->fd >= MAXCONNECTIONS)
 	    {
 		sendto_ops("No more connections allowed (%s)", cptr->name);
 		(void)close(cptr->fd);
 		return -1;
 	    }
 
-	un.sun_family = AF_UNIX;
 	(void)mkdir(path, 0755);
+	un.sun_family = AF_UNIX;
 	(void)sprintf(unixpath, "%s/%d", path, port);
 	(void)unlink(unixpath);
-	strncpyzt(un.sun_path, unixpath, sizeof(un.sun_path));
-	(void)strcpy(cptr->name, me.name);
 	errno = 0;
+	(void)strcpy(un.sun_path, unixpath);
 	get_sockhost(cptr, unixpath);
+	(void)strcpy(cptr->name, me.name);
 
 	if (bind(cptr->fd, (struct sockaddr *)&un, strlen(unixpath)+2) == -1)
 	    {
@@ -374,10 +372,12 @@ int	port;
 	    }
 	if (cptr->fd > highest_fd)
 		highest_fd = cptr->fd;
-	(void)listen(cptr->fd, 5);
+	(void)listen(cptr->fd, 1);
 	(void)chmod(path, 0755);
 	(void)chmod(unixpath, 0777);
-	cptr->flags |= FLAGS_UNIX;
+	SetMe(cptr);
+	cptr->flags |= (FLAGS_UNIX|FLAGS_LISTEN);
+	cptr->from = cptr;
 	cptr->port = 0;
 	local[cptr->fd] = cptr;
 
@@ -396,38 +396,40 @@ void	close_listeners()
 {
 	Reg1	aClient	*cptr;
 	Reg2	int	i;
-	Reg3	aConfItem *aconf;
+
+	/*
+	 * change the "accepted" from pointers to point back to me if they
+	 * were accepted from a strange socket.
+	 */
+	for (i = 0; i <= highest_fd; i++)
+	    {
+		if (!(cptr = local[i]))
+			continue;
+		if (cptr->acpt != &me)
+			cptr->acpt = &me;
+	    }
 
 	/*
 	 * close all 'extra' listening ports we have and unlink the file
 	 * name if it was a unix socket.
 	 */
-	for (i = highest_fd; i >= 0; i--)
+	for (i = 0; i <= highest_fd; i++)
 	    {
 		if (!(cptr = local[i]))
 			continue;
 		if (!IsMe(cptr) || cptr == &me || !IsListening(cptr))
 			continue;
-		aconf = cptr->confs->value.aconf;
 
-		if (IsIllegal(aconf) && aconf->clients == 0)
-		    {
-#ifdef	UNIXPORT
-			if (IsUnixSocket(cptr))
-			    {
-				(void)sprintf(unixpath, "%s/%d", aconf->host,
-					aconf->port);
-				(void)unlink(unixpath);
-			    }
-#endif
-			close_connection(cptr);
-		    }
+		if (IsUnixSocket(cptr))
+			(void)unlink(cptr->sockhost);
+		close_connection(cptr);
+		/*
+		 * have to restart loop because it gets reordered :-/
+		 */
+		i = 0;
 	    }
 }
 
-/*
- * init_sys
- */
 void	init_sys()
 {
 	Reg1	int	fd;
@@ -436,11 +438,7 @@ void	init_sys()
 
 	if (!getrlimit(RLIMIT_FD_MAX, &limit))
 	    {
-# ifdef	pyr
-		if (limit.rlim_cur < MAXCONNECTIONS)
-#else
 		if (limit.rlim_max < MAXCONNECTIONS)
-# endif
 		    {
 			(void)fprintf(stderr,"ircd fd table too big\n");
 			(void)fprintf(stderr,"Hard Limit: %d IRC max: %d\n",
@@ -448,7 +446,6 @@ void	init_sys()
 			(void)fprintf(stderr,"Fix MAXCONNECTIONS\n");
 			exit(-1);
 		    }
-# ifndef	pyr
 		limit.rlim_cur = limit.rlim_max; /* make soft limit the max */
 		if (setrlimit(RLIMIT_FD_MAX, &limit) == -1)
 		    {
@@ -456,25 +453,22 @@ void	init_sys()
 					limit.rlim_cur);
 			exit(-1);
 		    }
-# endif
 	    }
 #endif
 #ifdef sequent
 # ifndef	DYNIXPTX
-	int	fd_limit;
-
-	fd_limit = setdtablesize(MAXCONNECTIONS + 1);
-	if (fd_limit < MAXCONNECTIONS)
+	(void)setdtablesize(SEQ_NOFILE);
+	if (SEQ_NOFILE < MAXCONNECTIONS)
 	    {
 		(void)fprintf(stderr,"ircd fd table too big\n");
 		(void)fprintf(stderr,"Hard Limit: %d IRC max: %d\n",
-			fd_limit, MAXCONNECTIONS);
+			limit.rlim_max, MAXCONNECTIONS);
 		(void)fprintf(stderr,"Fix MAXCONNECTIONS\n");
 		exit(-1);
 	    }
 # endif
 #endif
-#if defined(PCS) || defined(DYNIXPTX) || defined(SVR3)
+#if defined(PCS) || defined(DYNIXPTX)
 	char	logbuf[BUFSIZ];
 
 	(void)setvbuf(stderr,logbuf,_IOLBF,sizeof(logbuf));
@@ -501,20 +495,19 @@ void	init_sys()
 	if (!(bootopt & BOOT_DEBUG))
 		(void)close(2);
 
-	if (((bootopt & BOOT_CONSOLE) || isatty(0)) &&
-	    !(bootopt & (BOOT_INETD|BOOT_OPER)))
+	if (!(bootopt & (BOOT_INETD|BOOT_OPER)))
 	    {
 		if (fork())
 			exit(0);
 #ifdef TIOCNOTTY
 		if ((fd = open("/dev/tty", O_RDWR)) >= 0)
 		    {
-			(void)ioctl(fd, TIOCNOTTY, (char *)NULL);
+			ioctl(fd, TIOCNOTTY, (char *)NULL);
 			(void)close(fd);
 		    }
 #endif
 #if defined(HPUX) || defined(SOL20) || defined(DYNIXPTX) || \
-    defined(_POSIX_SOURCE) || defined(SVR4)
+    defined(_POSIX_SOURCE)
 		(void)setsid();
 #else
 		(void)setpgrp(0, (int)getpid());
@@ -524,6 +517,7 @@ void	init_sys()
 	    }
 init_dgram:
 	resfd = init_resolver(0x1f);
+	udpfd = setup_ping();
 
 	return;
 }
@@ -556,18 +550,23 @@ void	write_pidfile()
  * from either the server's sockhost (if client fd is a tty or localhost)
  * or from the ip# converted into a string. 0 = success, -1 = fail.
  */
-static	int	check_init(cptr, sockn)
+static	int	check_init(cptr, sockn, full, socka)
 Reg1	aClient	*cptr;
-Reg2	char	*sockn;
+Reg2	char	*full, *sockn;
+Reg3	struct	sockaddr_in *socka;
 {
-	struct	sockaddr_in sk;
 	int	len = sizeof(struct sockaddr_in);
 
 #ifdef	UNIXPORT
 	if (IsUnixSocket(cptr))
 	    {
-		strncpyzt(sockn, cptr->acpt->sockhost, HOSTLEN+1);
-		get_sockhost(cptr, sockn);
+		strncpyzt(full, cptr->acpt->sockhost, HOSTLEN+1);
+		strncpyzt(sockn, full, HOSTLEN+1);
+		get_sockhost(cptr, full);
+		bcopy((char *)&cptr->ip, (char *)&socka->sin_addr,
+			sizeof(struct in_addr));
+		socka->sin_family = AF_INET;
+
 		return 0;
 	    }
 #endif
@@ -575,23 +574,22 @@ Reg2	char	*sockn;
 	/* If descriptor is a tty, special checking... */
 	if (isatty(cptr->fd))
 	    {
-		strncpyzt(sockn, me.sockhost, HOSTLEN);
-		bzero((char *)&sk, sizeof(struct sockaddr_in));
+		(void)strncpy(full, me.sockhost, HOSTLEN);
+		bzero((char *)socka, sizeof(struct sockaddr_in));
 	    }
-	else if (getpeername(cptr->fd, &sk, &len) == -1)
+	else if (getpeername(cptr->fd, socka, &len) == -1)
 	    {
 		report_error("connect failure: %s %s", cptr);
 		return -1;
 	    }
-	(void)strcpy(sockn, (char *)inetntoa((char *)&sk.sin_addr));
-	if (inet_netof(sk.sin_addr) == IN_LOOPBACKNET)
-	    {
-		cptr->hostp = NULL;
-		strncpyzt(sockn, me.sockhost, HOSTLEN);
-	    }
-	bcopy((char *)&sk.sin_addr, (char *)&cptr->ip,
+	(void)strcpy(sockn, (char *)inetntoa((char *)&socka->sin_addr));
+	if (inet_netof(socka->sin_addr) == IN_LOOPBACKNET)
+		(void)strncpy(full, me.sockhost, HOSTLEN);
+	else
+		(void)strcpy(full, sockn);
+	bcopy((char *)&socka->sin_addr, (char *)&cptr->ip,
 		sizeof(struct in_addr));
-	cptr->port = (int)(ntohs(sk.sin_port));
+	cptr->port = (int)(ntohs(socka->sin_port));
 
 	return 0;
 }
@@ -606,15 +604,16 @@ Reg2	char	*sockn;
 int	check_client(cptr)
 Reg1	aClient	*cptr;
 {
-	static	char	sockname[HOSTLEN+1];
+	static	char	sockname[HOSTLEN+1], fullname[HOSTLEN+1];
 	Reg2	struct	hostent *hp = NULL;
 	Reg3	int	i;
+	struct	sockaddr_in sk;
  
 	ClearAccess(cptr);
 	Debug((DEBUG_DNS, "ch_cl: check access for %s[%s]",
 		cptr->name, inetntoa((char *)&cptr->ip)));
 
-	if (check_init(cptr, sockname))
+	if (check_init(cptr, sockname, fullname, &sk))
 		return -2;
 
 	if (!IsUnixSocket(cptr))
@@ -638,16 +637,15 @@ Reg1	aClient	*cptr;
 		    }
 	    }
 
-	if ((i = attach_Iline(cptr, hp, sockname)))
+	if (attach_Iline(cptr, hp, sockname))
 	    {
 		Debug((DEBUG_DNS,"ch_cl: access denied: %s[%s]",
-			cptr->name, sockname));
-		return i;
+			cptr->name, fullname));
+		return -1;
 	    }
 
 	Debug((DEBUG_DNS, "ch_cl: access ok: %s[%s]",
-		cptr->name, sockname));
-
+		cptr->name, fullname));
 	if (inet_netof(cptr->ip) == IN_LOOPBACKNET || IsUnixSocket(cptr) ||
 	    inet_netof(cptr->ip) == inet_netof(mysk.sin_addr))
 	    {
@@ -740,8 +738,8 @@ aClient	*cptr;
 			ClearAccess(cptr);
 			lin.value.aconf = aconf;
 			lin.flags = ASYNC_CONF;
-			nextdnscheck = 1;
-			if ((s = index(aconf->host, '@')))
+			nextdnscheck = -1;
+			if (s = index(aconf->host, '@'))
 				s++;
 			else
 				s = aconf->host;
@@ -762,17 +760,18 @@ int	estab;
 	char	abuff[HOSTLEN+USERLEN+2];
 	char	sockname[HOSTLEN+1], fullname[HOSTLEN+1];
 	Link	*lp = cptr->confs;
+	struct	sockaddr_in sk;
 	int	i;
 
 	ClearAccess(cptr);
-	if (check_init(cptr, sockname))
+	if (check_init(cptr, sockname, fullname, &sk))
 		return -2;
 
 check_serverback:
 	if (hp)
 	    {
 		for (i = 0; hp->h_addr_list[i]; i++)
-			if (!bcmp(hp->h_addr_list[i], (char *)&cptr->ip,
+			if (!bcmp(hp->h_addr_list[i], (char *)&sk.sin_addr,
 				  sizeof(struct in_addr)))
 				break;
 		if (!hp->h_addr_list[i])
@@ -832,25 +831,11 @@ check_serverback:
 	 * It is quite possible to get here with the strange things that can
 	 * happen when using DNS in the way the irc server does. -avalon
 	 */
-	if (!hp)
-	    {
-		if (!c_conf)
-			c_conf = find_conf_ip(lp, (char *)&cptr->ip,
-					      cptr->username, CFLAG);
-		if (!n_conf)
-			n_conf = find_conf_ip(lp, (char *)&cptr->ip,
-					      cptr->username, NFLAG);
-	    }
-	else
-		for (i = 0; hp->h_addr_list[i]; i++)
-		    {
-			if (!c_conf)
-				c_conf = find_conf_ip(lp, hp->h_addr_list[i],
-						      cptr->username, CFLAG);
-			if (!n_conf)
-				n_conf = find_conf_ip(lp, hp->h_addr_list[i],
-						      cptr->username, NFLAG);
-		    }
+	(void)sprintf(abuff, "%s@*", cptr->username);
+	if (!c_conf)
+		c_conf = find_conf_ip(lp, (char *)&cptr->ip, abuff, CFLAG);
+	if (!n_conf)
+		n_conf = find_conf_ip(lp, (char *)&cptr->ip, abuff, NFLAG);
 	/*
 	 * detach all conf lines that got attached by attach_confs()
 	 */
@@ -874,7 +859,7 @@ check_serverback:
 	(void)attach_confs(cptr, name, CONF_HUB|CONF_LEAF);
 
 	if ((c_conf->ipnum.s_addr == -1) && !IsUnixSocket(cptr))
-		bcopy((char *)&cptr->ip, (char *)&c_conf->ipnum,
+		bcopy((char *)&(sk.sin_addr), (char *)&(c_conf->ipnum),
 			sizeof(struct in_addr));
 	if (!IsUnixSocket(cptr))
 		get_sockhost(cptr, c_conf->host);
@@ -920,10 +905,10 @@ aClient	*cptr;
 	    }
 	sendto_one(cptr, "SERVER %s 1 :%s",
 		   my_name_for_link(me.name, aconf), me.info);
-	if (!IsDead(cptr))
+	if (!(cptr->flags & FLAGS_DEADSOCKET))
 		start_auth(cptr);
 
-	return (IsDead(cptr)) ? -1 : 0;
+	return (cptr->flags & FLAGS_DEADSOCKET) ? -1 : 0;
 }
 
 /*
@@ -943,38 +928,14 @@ aClient *cptr;
 		ircstp->is_sv++;
 		ircstp->is_sbs += cptr->sendB;
 		ircstp->is_sbr += cptr->receiveB;
-		ircstp->is_sks += cptr->sendK;
-		ircstp->is_skr += cptr->receiveK;
 		ircstp->is_sti += time(NULL) - cptr->firsttime;
-		if (ircstp->is_sbs > 1023)
-		    {
-			ircstp->is_sks += (ircstp->is_sbs >> 10);
-			ircstp->is_sbs &= 0x3ff;
-		    }
-		if (ircstp->is_sbr > 1023)
-		    {
-			ircstp->is_skr += (ircstp->is_sbr >> 10);
-			ircstp->is_sbr &= 0x3ff;
-		    }
 	    }
 	else if (IsClient(cptr))
 	    {
 		ircstp->is_cl++;
 		ircstp->is_cbs += cptr->sendB;
 		ircstp->is_cbr += cptr->receiveB;
-		ircstp->is_cks += cptr->sendK;
-		ircstp->is_ckr += cptr->receiveK;
 		ircstp->is_cti += time(NULL) - cptr->firsttime;
-		if (ircstp->is_cbs > 1023)
-		    {
-			ircstp->is_cks += (ircstp->is_cbs >> 10);
-			ircstp->is_cbs &= 0x3ff;
-		    }
-		if (ircstp->is_cbr > 1023)
-		    {
-			ircstp->is_ckr += (ircstp->is_cbr >> 10);
-			ircstp->is_cbr &= 0x3ff;
-		    }
 	    }
 	else
 		ircstp->is_ni++;
@@ -982,13 +943,13 @@ aClient *cptr;
 	/*
 	 * remove outstanding DNS queries.
 	 */
-	del_queries((char *)cptr);
+	del_queries(cptr);
 	/*
 	 * If the connection has been up for a long amount of time, schedule
 	 * a 'quick' reconnect, else reset the next-connect cycle.
 	 */
-	if ((aconf = find_conf_exact(cptr->name, cptr->username,
-				    cptr->sockhost, CONF_CONNECT_SERVER)))
+	if (aconf = find_conf_exact(cptr->name, cptr->username,
+				    cptr->sockhost, CONF_CONNECT_SERVER))
 	    {
 		/*
 		 * Reschedule a faster reconnect, if this was a automaticly
@@ -1015,18 +976,6 @@ aClient *cptr;
 		DBufClear(&cptr->sendQ);
 		DBufClear(&cptr->recvQ);
 		bzero(cptr->passwd, sizeof(cptr->passwd));
-		/*
-		 * clean up extra sockets from P-lines which have been
-		 * discarded.
-		 */
-		if (cptr->acpt != &me && cptr->acpt != cptr)
-		    {
-			aconf = cptr->acpt->confs->value.aconf;
-			if (aconf->clients > 0)
-				aconf->clients--;
-			if (!aconf->clients && IsIllegal(aconf))
-				close_connection(cptr->acpt);
-		    }
 	    }
 	for (; highest_fd > 0; highest_fd--)
 		if (local[highest_fd])
@@ -1034,6 +983,7 @@ aClient *cptr;
 
 	det_confs_butmask(cptr, 0);
 	cptr->from = NULL; /* ...this should catch them! >:) --msa */
+	AcceptNewConnections = TRUE; /* ...perhaps new ones now succeed? */
 
 	/*
 	 * fd remap to keep local[i] filled at the bottom.
@@ -1067,13 +1017,10 @@ aClient	*cptr;
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
 		report_error("setsockopt(SO_REUSEADDR) %s:%s", cptr);
 #endif
-#if  defined(SO_DEBUG) && defined(DEBUGMODE) && 0
-/* Solaris with SO_DEBUG writes to syslog by default */
-#if !defined(SOL20) || defined(USE_SYSLOG)
+#ifdef	SO_DEBUG
 	opt = 1;
 	if (setsockopt(fd, SOL_SOCKET, SO_DEBUG, &opt, sizeof(opt)) < 0)
 		report_error("setsockopt(SO_DEBUG) %s:%s", cptr);
-#endif /* SOL20 */
 #endif
 #ifdef	SO_USELOOPBACK
 	opt = 1;
@@ -1086,49 +1033,20 @@ aClient	*cptr;
 		report_error("setsockopt(SO_RCVBUF) %s:%s", cptr);
 #endif
 #ifdef	SO_SNDBUF
-# ifdef	_SEQUENT_
-/* seems that Sequent freezes up if the receving buffer is a different size
- * to the sending buffer (maybe a tcp window problem too).
- */
 	opt = 8192;
-# else
-	opt = 8192;
-# endif
 	if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt)) < 0)
 		report_error("setsockopt(SO_SNDBUF) %s:%s", cptr);
 #endif
-#if defined(IP_OPTIONS) && defined(IPPROTO_IP)
-	{
-	char	*s = readbuf, *t = readbuf + sizeof(readbuf) / 2;
-
-	opt = sizeof(readbuf) / 8;
-	if (getsockopt(fd, IPPROTO_IP, IP_OPTIONS, t, &opt) < 0)
-		report_error("getsockopt(IP_OPTIONS) %s:%s", cptr);
-	else if (opt > 0)
-	    {
-		for (*readbuf = '\0'; opt > 0; opt--, s+= 3)
-			(void)sprintf(s, "%02.2x:", *t++);
-		*s = '\0';
-		sendto_ops("Connection %s using IP opts: (%s)",
-			   get_client_name(cptr, TRUE), readbuf);
-	    }
-	if (setsockopt(fd, IPPROTO_IP, IP_OPTIONS, (char *)NULL, 0) < 0)
-		report_error("setsockopt(IP_OPTIONS) %s:%s", cptr);
-	}
-#endif
 }
-
 
 int	get_sockerr(cptr)
 aClient	*cptr;
 {
 	int errtmp = errno, err = 0, len = sizeof(err);
-#ifdef	SO_ERROR
+
 	if (cptr->fd >= 0)
 		if (!getsockopt(cptr->fd, SOL_SOCKET, SO_ERROR, &err, &len))
-			if (err)
-				errtmp = err;
-#endif
+			errtmp = err;
 	return errtmp;
 }
 
@@ -1144,7 +1062,7 @@ void	set_non_blocking(fd, cptr)
 int	fd;
 aClient *cptr;
 {
-	int	res, nonb = 0;
+	int	res;
 
 	/*
 	** NOTE: consult ALL your relevant manual pages *BEFORE* changing
@@ -1152,23 +1070,20 @@ aClient *cptr;
 	**	 as can be seen by the PCS one.  They are *NOT* all the same.
 	**	 Heed this well. - Avalon.
 	*/
-#ifdef	NBLOCK_POSIX
-	nonb |= O_NONBLOCK;
-#endif
-#ifdef	NBLOCK_BSD
-	nonb |= O_NDELAY;
-#endif
-#ifdef	NBLOCK_SYSV
+#if defined(PCS) || defined(AIX)
 	/* This portion of code might also apply to NeXT.  -LynX */
 	res = 1;
 
 	if (ioctl (fd, FIONBIO, &res) < 0)
 		report_error("ioctl(fd,FIONBIO) failed for %s:%s", cptr);
 #else
+# if defined(O_NDELAY) && !defined(FNDELAY)
+#  define FNDELAY O_NDELAY
+# endif
 	if ((res = fcntl(fd, F_GETFL, 0)) == -1)
-		report_error("fcntl(fd, F_GETFL) failed for %s:%s",cptr);
-	else if (fcntl(fd, F_SETFL, res | nonb) == -1)
-		report_error("fcntl(fd, F_SETL, nonb) failed for %s:%s",cptr);
+		report_error("fcntl(fd,F_GETFL) failed for %s:%s",cptr);
+	else if (fcntl(fd, F_SETFL, res | FNDELAY) == -1)
+		report_error("fcntl(fd,F_SETL,FNDELAY) failed for %s:%s",cptr);
 #endif
 	return;
 }
@@ -1185,11 +1100,8 @@ int	fd;
 {
 	Link	lin;
 	aClient *acptr;
-	aConfItem *aconf = NULL;
 	acptr = make_client(NULL);
 
-	if (cptr != &me)
-		aconf = cptr->confs->value.aconf;
 	/* Removed preliminary access check. Full check is performed in
 	 * m_server and m_user instead. Also connection time out help to
 	 * get rid of unwanted connections.
@@ -1207,14 +1119,10 @@ int	fd;
 			report_error("Failed in connecting to %s :%s", cptr);
 add_con_refuse:
 			ircstp->is_ref++;
-			acptr->fd = -2;
-			free_client(acptr);
+			(void)free((char *)acptr);
 			(void)close(fd);
 			return NULL;
 		    }
-		/* don't want to add "Failed in connecting to" here.. */
-		if (aconf && IsIllegal(aconf))
-			goto add_con_refuse;
 		/* Copy ascii address to 'sockhost' just in case. Then we
 		 * have something valid to put into error messages...
 		 */
@@ -1241,16 +1149,15 @@ add_con_refuse:
 
 		lin.flags = ASYNC_CLIENT;
 		lin.value.cptr = acptr;
+		nextdnscheck = -1;
 		Debug((DEBUG_DNS, "lookup %s",
 			inetntoa((char *)&addr.sin_addr)));
 		acptr->hostp = gethost_byaddr((char *)&acptr->ip, &lin);
 		if (!acptr->hostp)
 			SetDNS(acptr);
-		nextdnscheck = 1;
+		nextdnscheck = -1;
 	    }
 
-	if (aconf)
-		aconf->clients++;
 	acptr->fd = fd;
 	if (fd > highest_fd)
 		highest_fd = fd;
@@ -1269,29 +1176,14 @@ aClient	*cptr;
 int	fd;
 {
 	aClient *acptr;
-	aConfItem *aconf = NULL;
 
 	acptr = make_client(NULL);
 
 	/* Copy ascii address to 'sockhost' just in case. Then we
 	 * have something valid to put into error messages...
 	 */
-	get_sockhost(acptr, me.sockhost);
-	if (cptr != &me)
-		aconf = cptr->confs->value.aconf;
-	if (aconf)
-	    {
-		if (IsIllegal(aconf))
-		    {
-			ircstp->is_ref++;
-			acptr->fd = -2;
-			free_client(acptr);
-			(void)close(fd);
-			return;
-		    }
-		else
-			aconf->clients++;
-	    }
+	get_sockhost(cptr, me.sockhost);
+
 	acptr->fd = fd;
 	if (fd > highest_fd)
 		highest_fd = fd;
@@ -1321,23 +1213,22 @@ Reg1	aClient *cptr;
 fd_set	*rfd;
 {
 	Reg1	int	dolen = 0, length = 0, done;
+	Reg2	char	*readptr;
 	time_t	now = time(NULL);
 
 	if (FD_ISSET(cptr->fd, rfd) &&
-	    !(IsPerson(cptr) && DBufLength(&cptr->recvQ) > 6090))
+	    !(IsPerson(cptr) && DBufLength(&cptr->recvQ) > 4088))
 	    {
-		errno = 0;
 		length = recv(cptr->fd, readbuf, sizeof(readbuf), 0);
 
 		cptr->lasttime = now;
 		if (cptr->lasttime > cptr->since)
 			cptr->since = cptr->lasttime;
-		cptr->flags &= ~(FLAGS_PINGSENT|FLAGS_NONL);
+		cptr->flags &= ~FLAGS_PINGSENT;
 		/*
 		 * If not ready, fake it so it isnt closed
 		 */
-		if (length == -1 &&
-			((errno == EWOULDBLOCK) || (errno == EAGAIN)))
+		if (length == -1 && errno == EWOULDBLOCK)
 			return 1;
 		if (length <= 0)
 			return length;
@@ -1351,7 +1242,7 @@ fd_set	*rfd;
 	    IsService(cptr))
 	    {
 		if (length > 0)
-			if ((done = dopacket(cptr, readbuf, length)))
+			if (done = dopacket(cptr, readbuf, length))
 				return done;
 	    }
 	else
@@ -1364,11 +1255,7 @@ fd_set	*rfd;
 		if (dbuf_put(&cptr->recvQ, readbuf, length) < 0)
 			return exit_client(cptr, cptr, cptr, "dbuf_put fail");
 
-		if (IsPerson(cptr) &&
-		    DBufLength(&cptr->recvQ) > CLIENT_FLOOD)
-			return exit_client(cptr, cptr, cptr, "Excess Flood");
-
-		while (DBufLength(&cptr->recvQ) && !NoNewLine(cptr) &&
+		while (DBufLength(&cptr->recvQ) &&
 		       ((cptr->status < STAT_UNKNOWN) ||
 			(cptr->since - now < 10)))
 		    {
@@ -1382,7 +1269,7 @@ fd_set	*rfd;
 						 sizeof(readbuf));
 				if (dolen <= 0)
 					break;
-				if ((done = dopacket(cptr, readbuf, dolen)))
+				if (done = dopacket(cptr, readbuf, length))
 					return done;
 				break;
 			    }
@@ -1402,13 +1289,11 @@ fd_set	*rfd;
 					return exit_client(cptr, cptr, cptr,
 							   "dbuf_getmsg fail");
 				if (DBufLength(&cptr->recvQ) < 510)
-				    {
-					cptr->flags |= FLAGS_NONL;
 					break;
-				    }
 				dolen = dbuf_get(&cptr->recvQ, readbuf, 511);
 				if (dolen > 0 && DBufLength(&cptr->recvQ))
-					DBufClear(&cptr->recvQ);
+					(void)dbuf_delete(&cptr->recvQ,
+						    DBufLength(&cptr->recvQ));
 			    }
 
 			if (dolen > 0 &&
@@ -1433,32 +1318,21 @@ time_t	delay; /* Don't ever use ZERO here, unless you mean to poll and then
 	Reg1	aClient	*cptr;
 	Reg2	int	nfds;
 	struct	timeval	wait;
-#ifdef	pyr
-	struct	timeval	nowt;
-	u_long	us;
-#endif
 	fd_set	read_set, write_set;
 	time_t	delay2 = delay, now;
-	u_long	usec = 0;
 	int	res, length, fd, i;
 	int	auth = 0;
 
 #ifdef NPATH
 	check_command(&delay, NULL);
 #endif
-#ifdef	pyr
-	(void) gettimeofday(&nowt, NULL);
-	now = nowt.tv_sec;
-#else
 	now = time(NULL);
-#endif
-
 	for (res = 0;;)
 	    {
 		FD_ZERO(&read_set);
 		FD_ZERO(&write_set);
 
-		for (i = highest_fd; i >= 0; i--)
+		for (i = 0; i <= highest_fd; i++)
 		    {
 			if (!(cptr = local[i]))
 				continue;
@@ -1476,9 +1350,10 @@ time_t	delay; /* Don't ever use ZERO here, unless you mean to poll and then
 				continue;
 			if (IsMe(cptr) && IsListening(cptr))
 			    {
-				if ((now > cptr->lasttime + 2))
+				if (AcceptNewConnections &&
+				    (now > cptr->lasttime + 2))
 					FD_SET(i, &read_set);
-				else if (delay2 > 2)
+				else if (AcceptNewConnections && delay2 > 2)
 					delay2 = 2;
 			    }
 			else if (!IsMe(cptr))
@@ -1490,24 +1365,7 @@ time_t	delay; /* Don't ever use ZERO here, unless you mean to poll and then
 			    }
 
 			if (DBufLength(&cptr->sendQ) || IsConnecting(cptr))
-#ifndef	pyr
 				FD_SET(i, &write_set);
-#else
-			    {
-				if (!(cptr->flags & FLAGS_BLOCKED))
-					FD_SET(i, &write_set);
-				else
-					delay2 = 0, usec = 500000;
-			    }
-			if (now - cptr->lw.tv_sec &&
-			    nowt.tv_usec - cptr->lw.tv_usec < 0)
-				us = 1000000;
-			else
-				us = 0;
-			us += nowt.tv_usec;
-			if (us - cptr->lw.tv_usec > 500000)
-				cptr->flags &= ~FLAGS_BLOCKED;
-#endif
 		    }
 
 		if (udpfd >= 0)
@@ -1516,7 +1374,7 @@ time_t	delay; /* Don't ever use ZERO here, unless you mean to poll and then
 			FD_SET(resfd, &read_set);
 
 		wait.tv_sec = MIN(delay2, delay);
-		wait.tv_usec = usec;
+		wait.tv_usec = 0;
 #ifdef	HPUX
 		nfds = select(FD_SETSIZE, (int *)&read_set, (int *)&write_set,
 				0, &wait);
@@ -1552,7 +1410,7 @@ time_t	delay; /* Don't ever use ZERO here, unless you mean to poll and then
 	 * because these can not be processed using the normal loops below.
 	 * -avalon
 	 */
-	for (i = highest_fd; (auth > 0) && (i >= 0); i--)
+	for (i = 0; (auth > 0) && (i <= highest_fd); i++)
 	    {
 		if (!(cptr = local[i]))
 			continue;
@@ -1570,7 +1428,7 @@ time_t	delay; /* Don't ever use ZERO here, unless you mean to poll and then
 			read_authports(cptr);
 		    }
 	    }
-	for (i = highest_fd; i >= 0; i--)
+	for (i = 0; i <= highest_fd; i++)
 		if ((cptr = local[i]) && FD_ISSET(i, &read_set) &&
 		    IsListening(cptr))
 		    {
@@ -1592,17 +1450,15 @@ time_t	delay; /* Don't ever use ZERO here, unless you mean to poll and then
 			    {
 				report_error("Cannot accept connections %s:%s",
 						cptr);
+				AcceptNewConnections = FALSE;
 				break;
 			    }
 			ircstp->is_ac++;
-			if (fd >= MAXCLIENTS)
+			if (fd >= MAXCONNECTIONS)
 			    {
 				ircstp->is_ref++;
 				sendto_ops("All connections in use. (%s)",
 					   get_client_name(cptr, TRUE));
-				(void)send(fd,
-					"ERROR :All connections in use\r\n",
-					32, 0);
 				(void)close(fd);
 				break;
 			    }
@@ -1616,11 +1472,9 @@ time_t	delay; /* Don't ever use ZERO here, unless you mean to poll and then
 #endif
 				(void)add_connection(cptr, fd);
 			nextping = time(NULL);
-			if (!cptr->acpt)
-				cptr->acpt = &me;
 		    }
 
-	for (i = highest_fd; i >= 0; i--)
+	for (i = 0; i <= highest_fd; i++)
 	    {
 		if (!(cptr = local[i]) || IsMe(cptr))
 			continue;
@@ -1635,27 +1489,20 @@ time_t	delay; /* Don't ever use ZERO here, unless you mean to poll and then
 				  write_err = completed_connection(cptr);
 			if (!write_err)
 				  (void)send_queued(cptr);
-			if (IsDead(cptr) || write_err)
+			if (cptr->flags & FLAGS_DEADSOCKET || write_err)
 			    {
-deadsocket:
 				if (FD_ISSET(i, &read_set))
 				    {
 					nfds--;
 					FD_CLR(i, &read_set);
 				    }
-				(void)exit_client(cptr, cptr, &me,
+				 (void)exit_client(cptr, cptr, &me,
 					     strerror(get_sockerr(cptr)));
-				continue;
+				 continue;
 			    }
 		    }
-		length = 1;	/* for fall through case */
-		if (!NoNewLine(cptr) || FD_ISSET(i, &read_set))
-			length = read_packet(cptr, &read_set);
-		if (length > 0)
-			flush_connections(i);
-		if ((length != FLUSH_BUFFER) && IsDead(cptr))
-			goto deadsocket;
-		if (!FD_ISSET(i, &read_set) && length > 0)
+		length = read_packet(cptr, &read_set);
+		if (!FD_ISSET(i, &read_set))
 			continue;
 		nfds--;
 		readcalls++;
@@ -1671,8 +1518,7 @@ deadsocket:
 		** in due course, select() returns that fd as ready
 		** for reading even though it ends up being an EOF. -avalon
 		*/
-		Debug((DEBUG_ERROR, "READ ERROR: fd = %d %d %d",
-			i, errno, length));
+		Debug((DEBUG_ERROR, "READ ERROR: fd = %d", i));
 
 		/*
 		** NOTE: if length == -2 then cptr has already been freed!
@@ -1687,9 +1533,7 @@ deadsocket:
 					      cptr);
 		    }
 		if (length != FLUSH_BUFFER)
-			(void)exit_client(cptr, cptr, &me, length >= 0 ?
-					  "EOF From client" :
-					  strerror(get_sockerr(cptr)));
+			(void)exit_client(cptr, cptr, &me, "Bad link?");
 	    }
 	return 0;
 }
@@ -1708,17 +1552,12 @@ struct	hostent	*hp;
 	int	errtmp, len;
 
 	Debug((DEBUG_NOTICE,"Connect to %s[%s] @%s",
-		aconf->name, aconf->host, inetntoa((char *)&aconf->ipnum)));
+		aconf->name,aconf->host,inetntoa((char *)&aconf->ipnum)));
 
-	if ((c2ptr = find_server(aconf->name, NULL)))
+	if (c2ptr = find_server(aconf->name, NULL))
 	    {
 		sendto_ops("Server %s already present from %s",
 			   aconf->name, get_client_name(c2ptr, TRUE));
-		if (by && IsPerson(by) && !MyClient(by))
-		  sendto_one(by,
-                             ":%s NOTICE %s :Server %s already present from %s",
-                             me.name, by->name, aconf->name,
-			     get_client_name(c2ptr, TRUE));
 		return -1;
 	    }
 
@@ -1726,30 +1565,25 @@ struct	hostent	*hp;
 	 * If we dont know the IP# for this host and itis a hostname and
 	 * not a ip# string, then try and find the appropriate host record.
 	 */
-	if ( ( !aconf->ipnum.s_addr )
-#ifdef UNIXPORT
-	    && ( ( aconf->host[2] ) != '/' )  /* needed for Unix domain -- dl*/
-#endif
-            )
+	if (!aconf->ipnum.s_addr)
 	    {
 	        Link    lin;
 
 		lin.flags = ASYNC_CONNECT;
 		lin.value.aconf = aconf;
-		nextdnscheck = 1;
+		nextdnscheck = -1;
 		s = (char *)index(aconf->host, '@');
 		s++; /* should NEVER be NULL */
-		if ((aconf->ipnum.s_addr = inet_addr(s)) == -1)
+		hp = gethost_byname(s, &lin);
+		Debug((DEBUG_NOTICE, "co_sv: hp %x ac %x na %s ho %s",
+			hp, aconf, aconf->name, s));
+		if (!hp)
 		    {
-			aconf->ipnum.s_addr = 0;
-			hp = gethost_byname(s, &lin);
-			Debug((DEBUG_NOTICE, "co_sv: hp %x ac %x na %s ho %s",
-				hp, aconf, aconf->name, s));
-			if (!hp)
-				return 0;
-			bcopy(hp->h_addr, (char *)&aconf->ipnum,
-				sizeof(struct in_addr));
+			nextdnscheck = -1;
+			return 0;
 		    }
+		bcopy(hp->h_addr, (char *)&aconf->ipnum,
+			sizeof(struct in_addr));
 	    }
 	cptr = make_client(NULL);
 	cptr->hostp = hp;
@@ -1760,7 +1594,7 @@ struct	hostent	*hp;
 	strncpyzt(cptr->sockhost, aconf->host, HOSTLEN+1);
 
 #ifdef	UNIXPORT
-	if (aconf->host[2] == '/') /* (/ starts a 2), Unix domain -- dl*/
+	if (aconf->host[0] == '/')
 		svp = connect_unix(aconf, cptr, &len);
 	else
 		svp = connect_inet(aconf, cptr, &len);
@@ -1772,8 +1606,7 @@ struct	hostent	*hp;
 	    {
 		if (cptr->fd != -1)
 			(void)close(cptr->fd);
-		cptr->fd = -2;
-		free_client(cptr);
+		(void)free((char *)cptr);
 		return -1;
 	    }
 
@@ -1786,13 +1619,8 @@ struct	hostent	*hp;
 		errtmp = errno; /* other system calls may eat errno */
 		(void)alarm(0);
 		report_error("Connect to host %s failed: %s",cptr);
-                if (by && IsPerson(by) && !MyClient(by))
-                  sendto_one(by,
-                             ":%s NOTICE %s :Connect to host %s failed.",
-			     me.name, by->name, cptr);
 		(void)close(cptr->fd);
-		cptr->fd = -2;
-		free_client(cptr);
+		(void)free((char *)cptr);
 		errno = errtmp;
 		if (errno == EINTR)
 			errno = ETIMEDOUT;
@@ -1815,14 +1643,9 @@ struct	hostent	*hp;
 	    {
       		sendto_ops("Host %s is not enabled for connecting:no C/N-line",
 			   aconf->host);
-                if (by && IsPerson(by) && !MyClient(by))
-                  sendto_one(by,
-                             ":%s NOTICE %s :Connect to host %s failed.",
-			     me.name, by->name, cptr);
 		det_confs_butmask(cptr, 0);
 		(void)close(cptr->fd);
-		cptr->fd = -2;
-		free_client(cptr);
+		(void)free((char *)cptr);
                 return(-1);
 	    }
 	/*
@@ -1834,8 +1657,7 @@ struct	hostent	*hp;
 		(void)strcpy(cptr->serv->by, by->name);
 		cptr->serv->user = by->user;
 		by->user->refcnt++;
-	    } else
-		(void)strcpy(cptr->serv->by, "AutoConn.");
+	    }
 	(void)strcpy(cptr->serv->up, me.name);
 	if (cptr->fd > highest_fd)
 		highest_fd = cptr->fd;
@@ -1863,7 +1685,7 @@ int	*lenp;
 	 * with it so if it fails its useless.
 	 */
 	cptr->fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (cptr->fd >= MAXCLIENTS)
+	if (cptr->fd >= MAXCONNECTIONS)
 	    {
 		sendto_ops("No more connections allowed (%s)", cptr->name);
 		return NULL;
@@ -1930,18 +1752,17 @@ int	*lenp;
 
 	if ((cptr->fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 	    {
-		report_error("Unix domain connect to host %s failed: %s", cptr);
+		report_error("Connect to host %s failed: %s", cptr);
 		return NULL;
 	    }
-	else if (cptr->fd >= MAXCLIENTS)
+	else if (cptr->fd >= MAXCONNECTIONS)
 	    {
 		sendto_ops("No more connections allowed (%s)", cptr->name);
 		return NULL;
 	    }
 
 	get_sockhost(cptr, aconf->host);
-	/* +2 needed for working Unix domain -- dl*/
-	strncpyzt(sock.sun_path, aconf->host+2, sizeof(sock.sun_path));
+	strncpyzt(sock.sun_path, aconf->host, sizeof(sock.sun_path));
 	sock.sun_family = AF_UNIX;
 	*lenp = strlen(sock.sun_path) + 2;
 
@@ -1982,7 +1803,7 @@ char	*name, *line, *host;
 		if (ut.ut_type == USER_PROCESS)
 			return 0;
 #else
-		strncpyzt(host, (ut.ut_host[0]) ? (ut.ut_host) : me.name,
+		(void)strncpy(host, (ut.ut_host[0]) ? (ut.ut_host) : me.name,
 			hlen);
 		if (ut.ut_name[0])
 			return 0;
@@ -2072,7 +1893,7 @@ char	*namebuf, *linebuf, *chname;
 	    }
 	(void)alarm(0);
 	(void)strcpy(line, "ircd: You are being summoned to Internet Relay \
-Chat on\n\r");
+Chat by\n\r");
 	(void)alarm(5);
 	if (write(fd, line, strlen(line)) != strlen(line))
 	    {
@@ -2082,8 +1903,8 @@ Chat on\n\r");
 		return;
 	    }
 	(void)alarm(0);
-	(void)sprintf(line, "ircd: Channel %s, by %s@%s (%s) %s\n\r",
-		chname, who->user->username, who->user->host, who->name, who->info);
+	(void)sprintf(line, "ircd: Channel %s: %s@%s (%s) %s\n\r",
+		chname, who->username, who->user->host, who->name, who->info);
 	(void)alarm(5);
 	if (write(fd, line, strlen(line)) != strlen(line))
 	    {
@@ -2104,7 +1925,7 @@ Chat on\n\r");
 	    }
 	(void)close(fd);
 	(void)alarm(0);
-	sendto_one(who, rpl_str(RPL_SUMMONING), me.name, who->name, namebuf);
+	sendto_one(who, rpl_str(RPL_SUMMONING), who->name, namebuf);
 	return;
 }
 #  endif
@@ -2191,40 +2012,26 @@ int	setup_ping()
 
 	if ((udpfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
 	    {
-		Debug((DEBUG_ERROR, "socket udp : %s", strerror(errno)));
+		perror("socket udp");
 		return -1;
 	    }
 	if (setsockopt(udpfd, SOL_SOCKET, SO_REUSEADDR,
-			(char *)&on, sizeof(on)) == -1)
+			(char *)&on, sizeof(on)))
 	    {
-#ifdef	USE_SYSLOG
-		syslog(LOG_ERR, "setsockopt udp fd %d : %m", udpfd);
-#endif
-		Debug((DEBUG_ERROR, "setsockopt so_reuseaddr : %s",
-			strerror(errno)));
-		(void)close(udpfd);
-		udpfd = -1;
+		perror("setsockopt so_reuseaddr");
+		close(udpfd);
 		return -1;
 	    }
-	on = 0;
-	(void) setsockopt(udpfd, SOL_SOCKET, SO_BROADCAST,
-			  (char *)&on, sizeof(on));
 	if (bind(udpfd, (struct sockaddr *)&from, sizeof(from))==-1)
 	    {
-#ifdef	USE_SYSLOG
-		syslog(LOG_ERR, "bind udp.%d fd %d : %m",
-			from.sin_port, udpfd);
-#endif
-		Debug((DEBUG_ERROR, "bind : %s", strerror(errno)));
-		(void)close(udpfd);
-		udpfd = -1;
+		perror("bind");
+		close(udpfd);
 		return -1;
 	    }
 	if (fcntl(udpfd, F_SETFL, FNDELAY)==-1)
 	    {
-		Debug((DEBUG_ERROR, "fcntl fndelay : %s", strerror(errno)));
-		(void)close(udpfd);
-		udpfd = -1;
+		perror("fcntl fndelay");
+		close(udpfd);
 		return -1;
 	    }
 	return udpfd;
@@ -2252,8 +2059,6 @@ static	void	polludp()
 			mlen = 0;
 	    }
 	Debug((DEBUG_DEBUG,"udp poll"));
-
-	n = recvfrom(udpfd, readbuf, mlen, 0, &from, &fromlen);
 	now = time(NULL);
 	if (now == last)
 		if (++cnt > 14)
@@ -2261,13 +2066,14 @@ static	void	polludp()
 	cnt = 0;
 	last = now;
 
+	n = recvfrom(udpfd, readbuf, sizeof(readbuf), 0, &from, &fromlen);
 	if (n == -1)
 	    {
-		if ((errno == EWOULDBLOCK) || (errno == EAGAIN))
+		if (errno == EWOULDBLOCK)
 			return;
 		else
 		    {
-			report_error("udp port recvfrom (%s): %s", &me);
+			report_error("udp port recvfrom : %s", &me);
 			return;
 		    }
 	    }
@@ -2275,11 +2081,13 @@ static	void	polludp()
 	if (n  < 8)
 		return;
 
-	s = readbuf + n;
+	/*
+	 * first 8 bytes...sequence # and 4 bytes data..
+	 */
+	s = readbuf + 12;
 	/*
 	 * attach my name and version for the reply
 	 */
-	*readbuf |= 1;
 	(void)strcpy(s, me.name);
 	s += strlen(s)+1;
 	(void)strcpy(s, PATCHLEVEL);
@@ -2304,7 +2112,7 @@ static	void	do_dns_async()
 	ln.flags = -1;
 	hp = get_res((char *)&ln);
 
-	Debug((DEBUG_DNS,"%#x = get_res(%d,%#x)",hp,ln.flags,ln.value.cptr));
+	Debug((DEBUG_DNS,"%x = get_res(%d,%x)", hp, ln.flags, ln.value.cptr));
 
 	switch (ln.flags)
 	{
@@ -2315,9 +2123,8 @@ static	void	do_dns_async()
 		 */
 		break;
 	case ASYNC_CLIENT :
-		if ((cptr = ln.value.cptr))
+		if (cptr = ln.value.cptr)
 		    {
-			del_queries((char *)cptr);
 			ClearDNS(cptr);
 			if (!DoingAuth(cptr))
 				SetAccess(cptr);
@@ -2341,6 +2148,13 @@ static	void	do_dns_async()
 		if (hp && aconf)
 			bcopy(hp->h_addr, (char *)&aconf->ipnum,
 			      sizeof(struct in_addr));
+		break;
+	case ASYNC_SERVER :
+		cptr = ln.value.cptr;
+		ClearDNS(cptr);
+		if (check_server(cptr, hp, NULL, NULL, 1))
+			(void)exit_client(cptr, cptr, cptr,
+				"No Authorization");
 		break;
 	default :
 		break;

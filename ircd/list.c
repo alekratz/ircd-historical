@@ -37,7 +37,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)list.c	2.24 4/20/94 (C) 1988 University of Oulu, \
+static  char sccsid[] = "@(#)list.c	2.17 3/30/93 (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 
@@ -45,7 +45,6 @@ Computing Center and Jarkko Oikarinen";
 #include "common.h"
 #include "sys.h"
 #include "h.h"
-#include "numeric.h"
 #ifdef	DBMALLOC
 #include "malloc.h"
 #endif
@@ -106,7 +105,7 @@ aClient	*from;
 	if (!from)
 		size = CLIENT_LOCAL_SIZE;
 
-	if (!(cptr = (aClient *)MyMalloc(size)))
+	if (!(cptr = (aClient *)malloc(size)))
 		outofmemory();
 	bzero((char *)cptr, (int)size);
 
@@ -138,12 +137,6 @@ aClient	*from;
 	return (cptr);
 }
 
-void	free_client(cptr)
-aClient	*cptr;
-{
-	MyFree((char *)cptr);
-}
-
 /*
 ** 'make_user' add's an User information block to a client
 ** if it was not previously allocated.
@@ -162,7 +155,6 @@ aClient *cptr;
 #endif
 		user->away = NULL;
 		user->refcnt = 1;
-		user->joined = 0;
 		user->channel = NULL;
 		user->invited = NULL;
 		cptr->user = user;
@@ -195,33 +187,14 @@ aClient	*cptr;
 **	Decrease user reference count by one and realease block,
 **	if count reaches 0
 */
-void	free_user(user, cptr)
+void	free_user(user)
 Reg1	anUser	*user;
-aClient	*cptr;
 {
 	if (--user->refcnt <= 0)
 	    {
 		if (user->away)
-			MyFree((char *)user->away);
-		/*
-		 * sanity check
-		 */
-		if (user->joined || user->refcnt < 0 ||
-		    user->invited || user->channel)
-#ifdef DEBUGMODE
-			dumpcore("%#x user (%s!%s@%s) %#x %#x %#x %d %d",
-				cptr, cptr ? cptr->name : "<noname>",
-				user->username, user->host, user,
-				user->invited, user->channel, user->joined,
-				user->refcnt);
-#else
-			sendto_ops("* %#x user (%s!%s@%s) %#x %#x %#x %d %d *",
-				cptr, cptr ? cptr->name : "<noname>",
-				user->username, user->host, user,
-				user->invited, user->channel, user->joined,
-				user->refcnt);
-#endif
-		MyFree((char *)user);
+			(void)free((char *)user->away);
+		(void)free((char *)user);
 #ifdef	DEBUGMODE
 		users.inuse--;
 #endif
@@ -245,18 +218,17 @@ Reg1	aClient	*cptr;
 	    }
 	if (cptr->next)
 		cptr->next->prev = cptr->prev;
-	if (IsPerson(cptr) && cptr->user)
+	if (cptr->user)
 	    {
 		add_history(cptr);
 		off_history(cptr);
+		(void)free_user(cptr->user);
 	    }
-	if (cptr->user)
-		(void)free_user(cptr->user, cptr);
 	if (cptr->serv)
 	    {
 		if (cptr->serv->user)
-			free_user(cptr->serv->user, cptr);
-		MyFree((char *)cptr->serv);
+			free_user(cptr->serv->user);
+		(void)free((char *)cptr->serv);
 #ifdef	DEBUGMODE
 		servs.inuse--;
 #endif
@@ -267,7 +239,7 @@ Reg1	aClient	*cptr;
 	else
 		crem.inuse--;
 #endif
-	(void)free_client(cptr);
+	(void)free((char *)cptr);
 	numclients--;
 	return;
 }
@@ -322,7 +294,7 @@ Link	*make_link()
 void	free_link(lp)
 Reg1	Link	*lp;
 {
-	MyFree((char *)lp);
+	(void)free((char *)lp);
 #ifdef	DEBUGMODE
 	links.inuse--;
 #endif
@@ -343,7 +315,7 @@ aClass	*make_class()
 void	free_class(tmp)
 Reg1	aClass	*tmp;
 {
-	MyFree((char *)tmp);
+	(void)free((char *)tmp);
 #ifdef	DEBUGMODE
 	classs.inuse--;
 #endif
@@ -368,32 +340,15 @@ aConfItem	*make_conf()
 	return (aconf);
 }
 
-void	delist_conf(aconf)
-aConfItem	*aconf;
-{
-	if (aconf == conf)
-		conf = conf->next;
-	else
-	    {
-		aConfItem	*bconf;
-
-		for (bconf = conf; aconf != bconf->next; bconf = bconf->next)
-			;
-		bconf->next = aconf->next;
-	    }
-	aconf->next = NULL;
-}
-
 void	free_conf(aconf)
 aConfItem *aconf;
 {
-	del_queries((char *)aconf);
 	MyFree(aconf->host);
 	if (aconf->passwd)
 		bzero(aconf->passwd, strlen(aconf->passwd));
 	MyFree(aconf->passwd);
 	MyFree(aconf->name);
-	MyFree((char *)aconf);
+	(void)free((char *)aconf);
 #ifdef	DEBUGMODE
 	aconfs.inuse--;
 #endif
@@ -407,41 +362,41 @@ char	*name;
 {
 	int	inuse = 0, mem = 0, tmp = 0;
 
-	sendto_one(cptr, ":%s %d %s :Local: inuse: %d(%d)",
-		   me.name, RPL_STATSDEBUG, name, inuse += cloc.inuse,
+	sendto_one(cptr, ":%s NOTICE %s :Local: inuse: %d(%d)",
+		   me.name, name, inuse += cloc.inuse,
 		   tmp = cloc.inuse * CLIENT_LOCAL_SIZE);
 	mem += tmp;
-	sendto_one(cptr, ":%s %d %s :Remote: inuse: %d(%d)",
-		   me.name, RPL_STATSDEBUG, name,
+	sendto_one(cptr, ":%s NOTICE %s :Remote: inuse: %d(%d)",
+		   me.name, name,
 		   crem.inuse, tmp = crem.inuse * CLIENT_REMOTE_SIZE);
 	mem += tmp;
 	inuse += crem.inuse;
-	sendto_one(cptr, ":%s %d %s :Users: inuse: %d(%d)",
-		   me.name, RPL_STATSDEBUG, name, users.inuse,
+	sendto_one(cptr, ":%s NOTICE %s :Users: inuse: %d(%d)",
+		   me.name, name, users.inuse,
 		   tmp = users.inuse * sizeof(anUser));
 	mem += tmp;
 	inuse += users.inuse,
-	sendto_one(cptr, ":%s %d %s :Servs: inuse: %d(%d)",
-		   me.name, RPL_STATSDEBUG, name, servs.inuse,
+	sendto_one(cptr, ":%s NOTICE %s :Servs: inuse: %d(%d)",
+		   me.name, name, servs.inuse,
 		   tmp = servs.inuse * sizeof(aServer));
 	mem += tmp;
 	inuse += servs.inuse,
-	sendto_one(cptr, ":%s %d %s :Links: inuse: %d(%d)",
-		   me.name, RPL_STATSDEBUG, name, links.inuse,
+	sendto_one(cptr, ":%s NOTICE %s :Links: inuse: %d(%d)",
+		   me.name, name, links.inuse,
 		   tmp = links.inuse * sizeof(Link));
 	mem += tmp;
 	inuse += links.inuse,
-	sendto_one(cptr, ":%s %d %s :Classes: inuse: %d(%d)",
-		   me.name, RPL_STATSDEBUG, name, classs.inuse,
+	sendto_one(cptr, ":%s NOTICE %s :Classes: inuse: %d(%d)",
+		   me.name, name, classs.inuse,
 		   tmp = classs.inuse * sizeof(aClass));
 	mem += tmp;
 	inuse += classs.inuse,
-	sendto_one(cptr, ":%s %d %s :Confs: inuse: %d(%d)",
-		   me.name, RPL_STATSDEBUG, name, aconfs.inuse,
+	sendto_one(cptr, ":%s NOTICE %s :Confs: inuse: %d(%d)",
+		   me.name, name, aconfs.inuse,
 		   tmp = aconfs.inuse * sizeof(aConfItem));
 	mem += tmp;
 	inuse += aconfs.inuse,
-	sendto_one(cptr, ":%s %d %s :Totals: inuse %d %d",
-		   me.name, RPL_STATSDEBUG, name, inuse, mem);
+	sendto_one(cptr, ":%s NOTICE %s :Totals: inuse %d %d",
+		   me.name, name, inuse, mem);
 }
 #endif

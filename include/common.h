@@ -20,10 +20,6 @@
 #ifndef	__common_include__
 #define __common_include__
 
-#ifdef	PARAMH
-#include <sys/param.h>
-#endif
-
 #ifndef PROTO
 #if __STDC__
 #	define PROTO(x)	x
@@ -47,16 +43,22 @@
 #define FALSE (0)
 #define TRUE  (!FALSE)
 
-#ifndef	MALLOCH
+#if defined(mips) || defined(pyr) || defined(apollo) || (defined(sequent) &&\
+    !defined(DYNIXPTX)) || defined(__convex__) ||\
+    (defined(BSD) && !defined(sun) && !defined(ultrix))
 char	*malloc(), *calloc();
 void	free();
 #else
-#include MALLOCH
+#include <malloc.h>
 #endif
 
 extern	int	matches PROTO((char *, char *));
+#ifdef	NEED_STRCASECMP
 extern	int	mycmp PROTO((char *, char *));
-extern	int	myncmp PROTO((char *, char *, int));
+#else
+#define	mycmp	strcasecmp
+#define	myncmp	strncasecmp
+#endif
 #ifdef NEED_STRTOK
 extern	char	*strtok PROTO((char *, char *));
 #endif
@@ -82,14 +84,22 @@ extern int inet_netof PROTO((struct in_addr));
 extern char *myctime PROTO((time_t));
 extern char *strtoken PROTO((char **, char *, char *));
 
-#ifndef MAX
-#define MAX(a, b)	((a) > (b) ? (a) : (b))
-#endif
-#ifndef MIN
-#define MIN(a, b)	((a) < (b) ? (a) : (b))
+#if defined(ULTRIX) || defined(SGI) || defined(sequent) || defined(HPUX) || \
+    defined(OSF)
+#include <sys/param.h>
+#else
+# ifndef MAX
+#  define MAX(a, b)	((a) > (b) ? (a) : (b))
+# endif
+# ifndef MIN
+#  define MIN(a, b)	((a) < (b) ? (a) : (b))
+# endif
 #endif
 
+#define MyFree(x)       if ((x) != NULL) free(x)
 #define DupString(x,y) do{x=MyMalloc(strlen(y)+1);(void)strcpy(x,y);}while(0)
+
+#ifdef USE_OUR_CTYPE
 
 extern unsigned char tolowertab[];
 
@@ -103,7 +113,6 @@ extern unsigned char touppertab[];
 
 #undef isalpha
 #undef isdigit
-#undef isxdigit
 #undef isalnum
 #undef isprint
 #undef isascii
@@ -112,7 +121,6 @@ extern unsigned char touppertab[];
 #undef islower
 #undef isupper
 #undef isspace
-#undef iscntrl
 
 extern unsigned char char_atribs[];
 
@@ -123,19 +131,19 @@ extern unsigned char char_atribs[];
 #define DIGIT 16
 #define SPACE 32
 
-#define	iscntrl(c) (char_atribs[(u_char)(c)]&CNTRL)
 #define isalpha(c) (char_atribs[(u_char)(c)]&ALPHA)
 #define isspace(c) (char_atribs[(u_char)(c)]&SPACE)
 #define islower(c) ((char_atribs[(u_char)(c)]&ALPHA) && ((u_char)(c) > 0x5f))
 #define isupper(c) ((char_atribs[(u_char)(c)]&ALPHA) && ((u_char)(c) < 0x60))
 #define isdigit(c) (char_atribs[(u_char)(c)]&DIGIT)
-#define	isxdigit(c) (isdigit(c) || 'a' <= (c) && (c) <= 'f' || \
-		     'A' <= (c) && (c) <= 'F')
 #define isalnum(c) (char_atribs[(u_char)(c)]&(DIGIT|ALPHA))
 #define isprint(c) (char_atribs[(u_char)(c)]&PRINT)
 #define isascii(c) ((u_char)(c) >= 0 && (u_char)(c) <= 0x7f)
 #define isgraph(c) ((char_atribs[(u_char)(c)]&PRINT) && ((u_char)(c) != 0x32))
 #define ispunct(c) (!(char_atribs[(u_char)(c)]&(CNTRL|ALPHA|DIGIT)))
+#else
+#include <ctype.h>
+#endif
 
 extern char *MyMalloc();
 extern void flush_connections();

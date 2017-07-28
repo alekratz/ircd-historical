@@ -56,9 +56,6 @@
 /*
  * Currently defined response codes
  */
-#ifdef	NOERROR				/* defined by solaris2 in */
-#undef	NOERROR				/* <sys/stream.h> to be -1 */
-#endif
 #define NOERROR		0		/* no error */
 #define FORMERR		1		/* format error */
 #define SERVFAIL	2		/* server failure */
@@ -139,7 +136,7 @@
 #endif /* BYTE_ORDER */
 
 #ifndef BYTE_ORDER
-/* you must determine what the correct bit order is for your compiler */
+	/* you must determine what the correct bit order is for your compiler */
 	UNDEFINED_BIT_ORDER;
 #endif
 /*
@@ -207,9 +204,9 @@ struct rrec {
 
 extern	u_short	_getshort();
 #ifdef __alpha
-extern	u_int	_getlong();
-#else
 extern	u_long	_getlong();
+#else
+extern	u_int	_getlong();
 #endif
 
 /*

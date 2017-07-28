@@ -27,18 +27,16 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <netdb.h>
-#ifdef STDDEFH
+#if defined(SGI) || defined(AIX)
 # include <stddef.h>
 #endif
 
 #ifdef USE_SYSLOG
-# include <syslog.h>
-# ifdef SYSSYSLOGH
+# ifdef HPUX
+#  include <syslog.h>
+# else
 #  include <sys/syslog.h>
 # endif
-#endif
-#ifdef	pyr
-#include <sys/time.h>
 #endif
 
 typedef	struct	ConfItem aConfItem;
@@ -70,8 +68,6 @@ typedef	struct	SMode	Mode;
 #define	KEYLEN		23
 #define	BUFSIZE		512		/* WARNING: *DONT* CHANGE THIS!!!! */
 #define	MAXRECIPIENTS 	20
-#define	MAXBANS		20
-#define	MAXBANLENGTH	1024
 
 #define	USERHOST_REPLYLEN	(NICKLEN+HOSTLEN+USERLEN+5)
 
@@ -156,11 +152,9 @@ typedef	struct	SMode	Mode;
 #define	FLAGS_LOCAL	0x10000 /* set for local clients */
 #define	FLAGS_GOTID	0x20000	/* successful ident lookup achieved */
 #define	FLAGS_DOID	0x40000	/* I-lines say must use ident return */
-#define	FLAGS_NONL	0x80000 /* No \n in buffer */
 
 #define	SEND_UMODES	(FLAGS_INVISIBLE|FLAGS_OPER|FLAGS_WALLOP)
 #define	ALL_UMODES	(SEND_UMODES|FLAGS_SERVNOTICE)
-#define	FLAGS_ID	(FLAGS_DOID|FLAGS_GOTID)
 
 /*
  * flags macros.
@@ -169,7 +163,7 @@ typedef	struct	SMode	Mode;
 #define	IsLocOp(x)		((x)->flags & FLAGS_LOCOP)
 #define	IsInvisible(x)		((x)->flags & FLAGS_INVISIBLE)
 #define	IsAnOper(x)		((x)->flags & (FLAGS_OPER|FLAGS_LOCOP))
-#define	IsPerson(x)		((x)->user && IsClient(x))
+#define	IsPerson(x)		IsClient(x)
 #define	IsPrivileged(x)		(IsAnOper(x) || IsServer(x))
 #define	SendWallops(x)		((x)->flags & FLAGS_WALLOP)
 #define	SendServNotice(x)	((x)->flags & FLAGS_SERVNOTICE)
@@ -177,7 +171,6 @@ typedef	struct	SMode	Mode;
 #define	IsListening(x)		((x)->flags & FLAGS_LISTEN)
 #define	DoAccess(x)		((x)->flags & FLAGS_CHKACCESS)
 #define	IsLocal(x)		((x)->flags & FLAGS_LOCAL)
-#define	IsDead(x)		((x)->flags & FLAGS_DEADSOCKET)
 
 #define	SetOper(x)		((x)->flags |= FLAGS_OPER)
 #define	SetLocOp(x)    		((x)->flags |= FLAGS_LOCOP)
@@ -188,7 +181,6 @@ typedef	struct	SMode	Mode;
 #define	DoingDNS(x)		((x)->flags & FLAGS_DOINGDNS)
 #define	SetAccess(x)		((x)->flags |= FLAGS_CHKACCESS)
 #define	DoingAuth(x)		((x)->flags & FLAGS_AUTH)
-#define	NoNewLine(x)		((x)->flags & FLAGS_NONL)
 
 #define	ClearOper(x)		((x)->flags &= ~FLAGS_OPER)
 #define	ClearInvisible(x)	((x)->flags &= ~FLAGS_INVISIBLE)
@@ -206,10 +198,8 @@ typedef	struct	SMode	Mode;
 #define	DEBUG_DNS    4	/* used by all DNS related routines - a *lot* */
 #define	DEBUG_INFO   5	/* general usful info */
 #define	DEBUG_NUM    6	/* numerics */
-#define	DEBUG_SEND   7	/* everything that is sent out */
-#define	DEBUG_DEBUG  8	/* anything to do with debugging, ie unimportant :) */
-#define	DEBUG_MALLOC 9	/* malloc/free calls */
-#define	DEBUG_LIST  10	/* debug list use */
+#define	DEBUG_SEND   8	/* everything that is sent out */
+#define	DEBUG_DEBUG  9	/* anything to do with debugging, ie unimportant :) */
 
 /*
  * defines for curses in client
@@ -219,7 +209,7 @@ typedef	struct	SMode	Mode;
 #define	TERMCAP_TERM	2
 
 struct	ConfItem	{
-	unsigned int	status;	/* If CONF_ILLEGAL, delete when no clients */
+	int	status;		/* If CONF_ILLEGAL, delete when no clients */
 	int	clients;	/* Number of *LOCAL* clients using this */
 	struct	in_addr ipnum;	/* ip number of host field */
 	char	*host;
@@ -233,30 +223,29 @@ struct	ConfItem	{
 	struct	ConfItem *next;
 };
 
-#define	CONF_ILLEGAL		0x80000000
-#define	CONF_MATCH		0x40000000
-#define	CONF_QUARANTINED_SERVER	0x0001
-#define	CONF_CLIENT		0x0002
-#define	CONF_CONNECT_SERVER	0x0004
-#define	CONF_NOCONNECT_SERVER	0x0008
-#define	CONF_LOCOP		0x0010
-#define	CONF_OPERATOR		0x0020
-#define	CONF_ME			0x0040
-#define	CONF_KILL		0x0080
-#define	CONF_ADMIN		0x0100
-#ifdef 	R_LINES
-#define	CONF_RESTRICT		0x0200
+#define	CONF_ILLEGAL            0x80000000
+#define	CONF_QUARANTINED_SERVER 0x0001
+#define	CONF_CLIENT             0x0002
+#define	CONF_CONNECT_SERVER     0x0004
+#define	CONF_NOCONNECT_SERVER   0x0008
+#define	CONF_LOCOP              0x0010
+#define	CONF_OPERATOR           0x0020
+#define	CONF_ME                 0x0040
+#define	CONF_KILL               0x0080
+#define	CONF_ADMIN              0x0100
+#ifdef R_LINES
+#define	CONF_RESTRICT           0x0200
 #endif
-#define	CONF_CLASS		0x0400
-#define	CONF_SERVICE		0x0800
+#define	CONF_CLASS              0x0400
+#define	CONF_SERVICE            0x0800
 #define	CONF_LEAF		0x1000
 #define	CONF_LISTEN_PORT	0x2000
 #define	CONF_HUB		0x4000
 
-#define	CONF_OPS		(CONF_OPERATOR | CONF_LOCOP)
 #define	CONF_SERVER_MASK	(CONF_CONNECT_SERVER | CONF_NOCONNECT_SERVER)
-#define	CONF_CLIENT_MASK	(CONF_CLIENT | CONF_SERVICE | CONF_OPS | \
-				 CONF_SERVER_MASK)
+#define	CONF_CLIENT_MASK	(CONF_CLIENT | CONF_CONNECT_SERVER | \
+				 CONF_LOCOP | CONF_NOCONNECT_SERVER | \
+				 CONF_OPERATOR | CONF_SERVICE)
 
 #define	IsIllegal(x)	((x)->status & CONF_ILLEGAL)
 
@@ -270,7 +259,6 @@ struct	User	{
 	char	*away;		/* pointer to away message */
 	time_t	last;
 	int	refcnt;		/* Number of times this block is referenced */
-	int	joined;		/* number of channels joined */
 	char	username[USERLEN+1];
 	char	host[HOSTLEN+1];
         char	server[HOSTLEN+1];
@@ -282,9 +270,6 @@ struct	User	{
 				** not yet be in links while USER is
 				** introduced... --msa
 				*/
-#ifdef	LIST_DEBUG
-	aClient	*bcptr;
-#endif
 };
 
 struct	Server	{
@@ -293,9 +278,6 @@ struct	Server	{
 	char	up[HOSTLEN+1];	/* uplink for this server */
 	char	by[NICKLEN+1];
 	aConfItem *nline;	/* N-line pointer for this server */
-#ifdef	LIST_DEBUG
-	aClient	*bcptr;
-#endif
 };
 
 struct Client	{
@@ -305,7 +287,6 @@ struct Client	{
 #ifdef USE_SERVICES
 	aService *service;
 #endif
-	int	hashv;		/* raw hash value */
 	time_t	lasttime;	/* ...should be only LOCAL clients? --msa */
 	time_t	firsttime;	/* time client was created */
 	time_t	since;		/* last time we parsed something */
@@ -330,20 +311,15 @@ struct Client	{
 	dbuf	sendQ;		/* Outgoing message queue--if socket full */
 	dbuf	recvQ;		/* Hold for data incoming yet to be parsed */
 	long	sendM;		/* Statistics: protocol messages send */
-	long	sendK;		/* Statistics: total k-bytes send */
+	long	sendB;		/* Statistics: total bytes send */
 	long	receiveM;	/* Statistics: protocol messages received */
-	long	receiveK;	/* Statistics: total k-bytes received */
-	u_short	sendB;		/* counters to count upto 1-k lots of bytes */
-	u_short	receiveB;	/* sent and received. */
+	long	receiveB;	/* Statistics: total bytes received */
 	aClient	*acpt;		/* listening client which we accepted from */
 	Link	*confs;		/* Configuration record associated */
 	int	authfd;		/* fd for rfc931 authentication */
 	struct	in_addr	ip;	/* keep real ip# too */
 	unsigned short	port;	/* and the remote port# too :-) */
 	struct	hostent	*hostp;
-#ifdef	pyr
-	struct	timeval	lw;
-#endif
 	char	sockhost[HOSTLEN+1]; /* This is the host name from the socket
 				  ** and after which the connection was
 				  ** accepted.
@@ -361,14 +337,10 @@ struct	stats {
 	unsigned int	is_cl;	/* number of client connections */
 	unsigned int	is_sv;	/* number of server connections */
 	unsigned int	is_ni;	/* connection but no idea who it was */
-	unsigned short	is_cbs;	/* bytes sent to clients */
-	unsigned short	is_cbr;	/* bytes received to clients */
-	unsigned short	is_sbs;	/* bytes sent to servers */
-	unsigned short	is_sbr;	/* bytes received to servers */
-	unsigned long	is_cks;	/* k-bytes sent to clients */
-	unsigned long	is_ckr;	/* k-bytes received to clients */
-	unsigned long	is_sks;	/* k-bytes sent to servers */
-	unsigned long	is_skr;	/* k-bytes received to servers */
+	unsigned long	is_cbs;	/* bytes sent to clients */
+	unsigned long	is_cbr;	/* bytes received to clients */
+	unsigned long	is_sbs;	/* bytes sent to servers */
+	unsigned long	is_sbr;	/* bytes received to servers */
 	time_t 		is_cti;	/* time spent connected by clients */
 	time_t		is_sti;	/* time spent connected by servers */
 	unsigned int	is_ac;	/* connections accepted */
@@ -424,7 +396,6 @@ struct	SLink	{
 
 struct Channel	{
 	struct	Channel *nextch, *prevch, *hnextch;
-	int	hashv;		/* raw hash value */
 	Mode	mode;
 	char	topic[TOPICLEN+1];
 	int	users;
@@ -442,7 +413,6 @@ struct Channel	{
 
 #define	CHFL_CHANOP     0x0001 /* Channel operator */
 #define	CHFL_VOICE      0x0002 /* the power to speak */
-#define	CHFL_BAN	0x0004 /* ban channel flag */
 
 /* Channel Visibility macros */
 
@@ -502,8 +472,8 @@ struct Channel	{
 /* used in SetMode() in channel.c and m_umode() in s_msg.c */
 
 #define	MODE_NULL      0
-#define	MODE_ADD       0x40000000
-#define	MODE_DEL       0x20000000
+#define	MODE_ADD       0x80000000
+#define	MODE_DEL       0x40000000
 
 /* return values for hunt_server() */
 

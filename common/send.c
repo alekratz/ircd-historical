@@ -23,7 +23,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)send.c	2.32 2/28/94 (C) 1988 University of Oulu, \
+static  char sccsid[] = "@(#)send.c	2.23 4/15/93 (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 
@@ -33,11 +33,7 @@ Computing Center and Jarkko Oikarinen";
 #include "h.h"
 #include <stdio.h>
 
-#ifdef	IRCII_KLUDGE
-#define	NEWLINE	"\n"
-#else
 #define NEWLINE	"\r\n"
-#endif
 
 static	char	sendbuf[2048];
 static	int	send_message PROTO((aClient *, char *, int));
@@ -61,21 +57,15 @@ static	int	sentalong[MAXCONNECTIONS];
 **	Also, the notice is skipped for "uninteresting" cases,
 **	like Persons and yet unknown connections...
 */
-static	int	dead_link(to, notice)
+static	int	dead_link(to,notice)
 aClient *to;
 char	*notice;
 {
 	to->flags |= FLAGS_DEADSOCKET;
-	/*
-	 * If because of BUFFERPOOL problem then clean dbuf's now so that
-	 * notices don't hurt operators below.
-	 */
-	DBufClear(&to->recvQ);
-	DBufClear(&to->sendQ);
 #ifndef CLIENT_COMPILE
-	if (!IsPerson(to) && !IsUnknown(to) && !(to->flags & FLAGS_CLOSING))
+	if (notice != (char *)NULL && !IsPerson(to) && !IsUnknown(to) &&
+	    !(to->flags & FLAGS_CLOSING))
 		sendto_ops(notice, get_client_name(to, FALSE));
-	Debug((DEBUG_ERROR, notice, get_client_name(to, FALSE)));
 #endif
 	return -1;
 }
@@ -99,12 +89,12 @@ int	fd;
 
 	if (fd == me.fd)
 	    {
-		for (i = highest_fd; i >= 0; i--)
+		for (i = 0; i <= highest_fd; i++)
 			if ((cptr = local[i]) && DBufLength(&cptr->sendQ) > 0)
 				(void)send_queued(cptr);
 	    }
-	else if (fd >= 0 && (cptr = local[fd]) && DBufLength(&cptr->sendQ) > 0)
-		(void)send_queued(cptr);
+	else if (fd >= 0 && local[fd])
+		(void)send_queued(local[fd]);
 #endif
 }
 #endif
@@ -119,23 +109,16 @@ static	int	send_message(to, msg, len)
 aClient	*to;
 char	*msg;	/* if msg is a null pointer, we are flushing connection */
 int	len;
-#ifdef SENDQ_ALWAYS
 {
-	if (IsDead(to))
+#ifdef SENDQ_ALWAYS
+	if (to->flags & FLAGS_DEADSOCKET)
 		return 0; /* This socket has already been marked as dead */
-# ifdef	CLIENT_COMPILE
+#ifdef	CLIENT_COMPILE
 	if (DBufLength(&to->sendQ) > MAXSENDQLENGTH)
-		return dead_link(to,"Max SendQ limit exceeded for %s");
-# else
+#else
 	if (DBufLength(&to->sendQ) > get_sendq(to))
-	    {
-		if (IsServer(to))
-			sendto_ops("Max SendQ limit exceeded for %s: %d > %d",
-			   	get_client_name(to, FALSE),
-				DBufLength(&to->sendQ), get_sendq(to));
-		return dead_link(to, "Max Sendq exceeded");
-	    }
-# endif
+#endif
+		return dead_link(to,"Max SendQ limit exceeded for %s");
 	else if (dbuf_put(&to->sendQ, msg, len) < 0)
 		return dead_link(to, "Buffer allocation error for %s");
 	/*
@@ -155,15 +138,14 @@ int	len;
 	** trying to flood that link with data (possible during the net
 	** relinking done by servers with a large load).
 	*/
-	if (DBufLength(&to->sendQ)/1024 > to->lastsq)
+	if (DBufLength(&to->sendQ)/2048 > to->lastsq)
 		send_queued(to);
 	return 0;
 }
 #else
-{
 	int	rlen = 0;
 
-	if (IsDead(to))
+	if (to->flags & FLAGS_DEADSOCKET)
 		return 0; /* This socket has already been marked as dead */
 
 	/*
@@ -178,18 +160,12 @@ int	len;
 		** Was unable to transfer all of the requested data. Queue
 		** up the remainder for some later time...
 		*/
-# ifdef	CLIENT_COMPILE
+#ifdef	CLIENT_COMPILE
 		if (DBufLength(&to->sendQ) > MAXSENDQLENGTH)
-			return dead_link(to,"Max SendQ limit exceeded for %s");
-# else
+#else
 		if (DBufLength(&to->sendQ) > get_sendq(to))
-		    {
-			sendto_ops("Max SendQ limit exceeded for %s : %d > %d",
-				   get_client_name(to, FALSE),
-				   DBufLength(&to->sendQ), get_sendq(to));
-			return dead_link(to, "Max Sendq exceeded");
-		    }
-# endif
+#endif
+			return dead_link(to,"Max SendQ limit exceeded for %s");
 		else if (dbuf_put(&to->sendQ,msg+rlen,len-rlen) < 0)
 			return dead_link(to,"Buffer allocation error for %s");
 	    }
@@ -202,6 +178,10 @@ int	len;
 	me.sendM += 1;
 	if (to->acpt != &me)
 		to->acpt->sendM += 1;
+	to->sendB += rlen;
+	me.sendB += rlen;
+	if (to->acpt != &me)
+		to->acpt->sendB += 1;
 	return 0;
 }
 #endif
@@ -222,7 +202,7 @@ aClient *to;
 	** Once socket is marked dead, we cannot start writing to it,
 	** even if the error is removed...
 	*/
-	if (IsDead(to))
+	if (to->flags & FLAGS_DEADSOCKET)
 	    {
 		/*
 		** Actually, we should *NEVER* get here--something is
@@ -242,12 +222,16 @@ aClient *to;
 		if ((rlen = deliver_it(to, msg, len)) < 0)
 			return dead_link(to,"Write error to %s, closing link");
 		(void)dbuf_delete(&to->sendQ, rlen);
-		to->lastsq = DBufLength(&to->sendQ)/1024;
+		to->lastsq = DBufLength(&to->sendQ)/2048;
+		to->sendB += rlen;
+		me.sendB += rlen;
+		if (to->acpt != &me)
+			to->acpt->sendB += rlen;
 		if (rlen < len) /* ..or should I continue until rlen==0? */
 			break;
 	    }
 
-	return (IsDead(to)) ? -1 : 0;
+	return (to->flags & FLAGS_DEADSOCKET) ? -1 : 0;
 }
 
 /*
@@ -268,11 +252,9 @@ va_dcl
 	va_list	vl;
 #endif
 
-/*
 # ifdef NPATH
         check_command((long)1, pattern, p1, p2, p3);
 # endif
-*/
 
 #ifdef VMS
 	extern int goodbye;
@@ -307,9 +289,7 @@ va_dcl
 	    }
 #endif
 	(void)strcat(sendbuf, NEWLINE);
-#ifndef	IRCII_KLUDGE
 	sendbuf[510] = '\r';
-#endif
 	sendbuf[511] = '\n';
 	sendbuf[512] = '\0';
 	(void)send_message(to, sendbuf, strlen(sendbuf));
@@ -462,7 +442,8 @@ va_dcl
 		    user == cptr || !user->user)
 			continue;
 		for (lp = user->user->channel; lp; lp = lp->next)
-			if (IsMember(cptr, lp->value.chptr))
+			if (IsMember(user, lp->value.chptr) &&
+			    IsMember(cptr, lp->value.chptr))
 			    {
 # ifdef	USE_VARARGS
 				sendto_prefix_one(cptr, user, pattern, vl);
@@ -744,8 +725,8 @@ va_dcl
 		if ((cptr = local[i]) && !IsServer(cptr) && !IsMe(cptr) &&
 		    SendServNotice(cptr))
 		    {
-			(void)sprintf(nbuf, ":%s NOTICE %s :*** Notice -- ",
-					me.name, cptr->name);
+			(void)sprintf(nbuf, "NOTICE %s :*** Notice -- ",
+					cptr->name);
 			(void)strncat(nbuf, pattern,
 					sizeof(nbuf) - strlen(nbuf));
 #ifdef	USE_VARARGS
@@ -868,12 +849,12 @@ va_dcl
 		(void)strcpy(sender, from->name);
 		if (user)
 		    {
-			if (*user->username)
+			if (user->username && *user->username)
 			    {
 				(void)strcat(sender, "!");
 				(void)strcat(sender, user->username);
 			    }
-			if (*user->host && !MyConnect(from))
+			if (user->host && *user->host && !MyConnect(from))
 			    {
 				(void)strcat(sender, "@");
 				(void)strcat(sender, user->host);
@@ -884,7 +865,7 @@ va_dcl
 		** flag is used instead of index(sender, '@') for speed and
 		** also since username/nick may have had a '@' in them. -avalon
 		*/
-		if (!flag && MyConnect(from) && *user->host)
+		if (!flag && MyConnect(from))
 		    {
 			(void)strcat(sender, "@");
 			if (IsUnixSocket(from))

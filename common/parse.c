@@ -23,7 +23,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)parse.c	2.33 1/30/94 (C) 1988 University of Oulu, \
+static  char sccsid[] = "@(#)parse.c	2.23 5/3/93 (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 #include "struct.h"
@@ -36,17 +36,67 @@ Computing Center and Jarkko Oikarinen";
 #include "h.h"
 
 /*
- * NOTE: parse() should not be called recursively by other functions!
+ * NOTE: parse() should not be called recusively by other fucntions!
  */
 static	char	*para[MAXPARA+1];
+#ifndef	CLIENT_COMPILE
+static	int	cancel_clients PROTO((aClient *, aClient *));
+static	void	remove_unknown PROTO((aClient *, char *));
+#endif
 
 #ifdef	CLIENT_COMPILE
 static	char	sender[NICKLEN+USERLEN+HOSTLEN+3];
 char	userhost[USERLEN+HOSTLEN+2];
 #else
 static	char	sender[HOSTLEN+1];
-static	int	cancel_clients PROTO((aClient *, aClient *, char *));
-static	void	remove_unknown PROTO((aClient *, char *));
+#endif
+
+#ifdef	NEED_STRCASECMP
+int	myncmp(str1, str2, n)
+Reg1	unsigned char	*str1;
+Reg2	unsigned char	*str2;
+int	n;
+    {
+#ifdef USE_OUR_CTYPE
+	while (toupper(*str1) == toupper(*str2))
+#else
+	while ( (islower(*str1) ? *str1 : tolower(*str1)) ==
+		(islower(*str2) ? *str2 : tolower(*str2)))
+#endif
+	    {
+		str1++; str2++; n--;
+		if (n == 0 || (*str1 == '\0' && *str2 == '\0'))
+			return(0);
+	    }
+	return(1);
+    }
+
+/*
+**  Case insensitive comparison of two NULL terminated strings.
+**
+**	return	0, if equal
+**		1, if not equal
+*/
+int	mycmp(s1, s2)
+char	*s1;
+char	*s2;
+    {
+	Reg1 unsigned char *str1 = (unsigned char *)s1;
+	Reg2 unsigned char *str2 = (unsigned char *)s2;
+#ifdef USE_OUR_CTYPE
+	while (toupper(*str2) == toupper(*str1))
+#else
+	while ( (islower(*str1) ? *str1 : tolower(*str1)) ==
+		(islower(*str2) ? *str2 : tolower(*str2)))
+#endif
+	    {
+		if (*str1 == '\0')
+			return(0);
+		str1++;
+		str2++;
+	    }
+	return 1;
+    }
 #endif
 
 /*
@@ -112,12 +162,12 @@ int	*count;
 	Reg2	aClient	*res = cptr;
 
 	*count = 0;
-	if (collapse(user))
+	if (user)
 		for (c2ptr = client; c2ptr; c2ptr = c2ptr->next) 
 		    {
 			if (!MyClient(c2ptr)) /* implies mine and a user */
 				continue;
-			if ((!host || !match(host, c2ptr->user->host)) &&
+			if ((!host || !matches(host, c2ptr->user->host)) &&
 			     mycmp(user, c2ptr->user->username) == 0)
 			    {
 				(*count)++;
@@ -156,10 +206,10 @@ aClient *cptr;
 {
 	Reg1 aClient *c2ptr = cptr;
 
-	if (!collapse(name))
+	if (!name)
 		return c2ptr;
 
-	if ((c2ptr = hash_find_server(name, cptr)))
+	if (c2ptr = hash_find_server(name, cptr))
 		return (c2ptr);
 	if (!index(name, '*'))
 		return c2ptr;
@@ -167,10 +217,10 @@ aClient *cptr;
 	    {
 		if (!IsServer(c2ptr) && !IsMe(c2ptr))
 			continue;
-		if (match(name, c2ptr->name) == 0)
+		if (matches(name, c2ptr->name) == 0)
 			break;
 		if (index(c2ptr->name, '*'))
-			if (match(c2ptr->name, name) == 0)
+			if (matches(c2ptr->name, name) == 0)
 					break;
 	    }
 	return (c2ptr ? c2ptr : cptr);
@@ -182,15 +232,15 @@ aClient	*cptr;
 {
 	Reg1	aClient *c2ptr = cptr;
 
-	if (!collapse(name))
+	if (!name)
 		return c2ptr;
 
 	for (c2ptr = client; c2ptr; c2ptr = c2ptr->next)
 	    {
 		if (!IsServer(c2ptr) && !IsMe(c2ptr))
 			continue;
-		if (match(c2ptr->name, name) == 0 ||
-		    match(name, c2ptr->name) == 0)
+		if (matches(c2ptr->name, name) == 0 ||
+		    matches(name, c2ptr->name) == 0)
 			break;
 	    }
 	return (c2ptr ? c2ptr : cptr);
@@ -229,10 +279,6 @@ struct	Message *mptr;
 	Reg3	int	len, i, numeric, paramcount;
 
 	Debug((DEBUG_DEBUG,"Parsing: %s", buffer));
-#ifndef	CLIENT_COMPILE
-	if (IsDead(cptr))
-		return 0;
-#endif
 
 	s = sender;
 	*s = '\0';
@@ -250,15 +296,15 @@ struct	Message *mptr;
 				*s++ = *ch; /* leave room for NULL */
 		*s = '\0';
 #ifdef CLIENT_COMPILE
-		if ((s = index(sender, '!')))
+		if (s = index(sender, '!'))
 		    {
 			*s++ = '\0';
-			strncpyzt(userhost, s, sizeof(userhost));
+			(void)strncpy(userhost, s, sizeof(userhost));
 		    }
-		else if ((s = index(sender, '@')))
+		else if (s = index(sender, '@'))
 		    {
 			*s++ = '\0';
-			strncpyzt(userhost, s, sizeof(userhost));
+			(void)strncpy(userhost, s, sizeof(userhost));
 		    }
 #endif
 		/*
@@ -308,7 +354,7 @@ struct	Message *mptr;
 					"Message (%s) coming from (%s)",
 					buffer, cptr->name));
 #ifndef	CLIENT_COMPILE
-				return cancel_clients(cptr, from, buffer);
+				return cancel_clients(cptr, from);
 #else
 				return -1;
 #endif
@@ -373,6 +419,13 @@ struct	Message *mptr;
 #ifdef	CLIENT_COMPILE
 				Debug((DEBUG_ERROR,"Unknown (%s) from %s[%s]",
 					ch, cptr->name, cptr->sockhost));
+				/*
+				** This concerns only client ... --Armin
+				*/
+				if (me.user)
+					Debug((DEBUG_ERROR,
+						"*** Error: %s %s from server",
+						"Unknown command", ch));
 #else
 				Debug((DEBUG_ERROR,"Unknown (%s) from %s",
 					ch, get_client_name(cptr, TRUE)));
@@ -442,15 +495,18 @@ struct	Message *mptr;
 	para[++i] = NULL;
 	if (mptr == NULL)
 		return (do_numeric(numeric, cptr, from, i, para));
-	mptr->count++;
-	if (IsRegisteredUser(cptr) &&
+	else
+	    {
+		mptr->count++;
+		if (IsRegisteredUser(cptr) &&
 #ifdef	IDLE_FROM_MSG
-	    mptr->func == m_private)
+		    mptr->func == m_private)
 #else
-	    mptr->func != m_ping && mptr->func != m_pong)
+		    mptr->func != m_ping && mptr->func != m_pong)
 #endif
-		from->user->last = time(NULL);
-	return (*mptr->func)(cptr, from, i, para);
+			from->user->last = time(NULL);
+		return (*mptr->func)(cptr, from, i, para);
+	    }
     }
 
 /*
@@ -481,16 +537,15 @@ char	*newline;
 }
 
 #ifndef	CLIENT_COMPILE
-static	int	cancel_clients(cptr, sptr, cmd)
+static	int	cancel_clients(cptr, sptr)
 aClient	*cptr, *sptr;
-char	*cmd;
 {
 	/*
 	 * kill all possible points that are causing confusion here,
 	 * I'm not sure I've got this all right...
 	 * - avalon
 	 */
-	sendto_ops("Message (%s) for %s[%s!%s@%s] from %s", cmd,
+	sendto_ops("Message for %s[%s!%s@%s] from %s",
 		   sptr->name, sptr->from->name, sptr->from->username,
 		   sptr->from->sockhost, get_client_name(cptr, TRUE));
 	/*
@@ -499,10 +554,7 @@ char	*cmd;
 	 * then the same deal.
 	 */
 	if (IsServer(sptr) || IsMe(sptr))
-	    {
-		sendto_ops("Dropping server %s", cptr->name);
 		return exit_client(cptr, cptr, &me, "Fake Direction");
-	    }
 	/*
 	 * Ok, someone is trying to impose as a client and things are
 	 * confused.  If we got the wrong prefix from a server, send out a
@@ -515,7 +567,7 @@ char	*cmd;
 				   sptr->name, sptr->from->name,
 				   get_client_name(cptr, TRUE));
 		sptr->flags |= FLAGS_KILLED;
-		return exit_client(cptr, sptr, &me, "Fake Prefix");
+		return exit_client(sptr, sptr, &me, "Fake Prefix");
 	    }
 	return exit_client(cptr, cptr, &me, "Fake prefix");
 }
@@ -531,6 +583,8 @@ char	*sender;
 	 */
 	if (!IsServer(cptr))
 		return;
+	sendto_ops("Got unknown prefix (%s) from %s",
+		   sender, get_client_name(cptr, FALSE));
 	/*
 	 * Do kill if it came from a server because it means there is a ghost
 	 * user on the other server which needs to be removed. -avalon

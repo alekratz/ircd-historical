@@ -24,15 +24,23 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)whowas.c	2.16 08 Nov 1993 (C) 1988 Markku Savela";
+static  char sccsid[] = "@(#)whowas.c	2.12 2/23/93 (C) 1988 Markku Savela";
 #endif
 
 #include "struct.h"
 #include "common.h"
 #include "sys.h"
 #include "numeric.h"
-#include "whowas.h"
 #include "h.h"
+
+typedef struct aname {
+	anUser	*ww_user;
+	aClient	*ww_online;
+	time_t	ww_logout;
+	char	ww_nick[NICKLEN+1];
+	char	ww_info[REALLEN+1];
+} aName;
+
 
 static	aName	was[NICKNAMEHISTORYLENGTH];
 static	int	ww_index = 0;
@@ -52,7 +60,7 @@ Reg1	aClient	*cptr;
 
 	np2 = &was[ww_index];
 	if (np2->ww_user)
-		free_user(np2->ww_user, np2->ww_online);
+		free_user(np2->ww_user);
 
 	bcopy((char *)&ntmp, (char *)np2, sizeof(aName));
 
@@ -73,7 +81,6 @@ char	*nick;
 time_t	timelimit;
 {
 	Reg1	aName	*wp, *wp2;
-	Reg2	int	i = 0;
 
 	wp = wp2 = &was[ww_index];
 	timelimit = time(NULL)-timelimit;
@@ -83,10 +90,10 @@ time_t	timelimit;
 			break;
 		wp++;
 		if (wp == &was[NICKNAMEHISTORYLENGTH])
-			i = 1, wp = was;
+			wp = was;
 	} while (wp != wp2);
 
-	if (wp != wp2 || !i)
+	if (wp != NULL)
 		return (wp->ww_online);
 	return (NULL);
 }
@@ -141,7 +148,7 @@ char	*parv[];
 		if (hunt_server(cptr,sptr,":%s WHOWAS %s %s :%s", 3,parc,parv))
 			return 0;
 
-	for (s = parv[1]; (nick = strtoken(&p, s, ",")); s = NULL)
+	for (s = parv[1]; nick = strtoken(&p, s, ","); s = NULL)
 	    {
 		wp = wp2 = &was[ww_index - 1];
 
@@ -181,6 +188,7 @@ char	*parv[];
     }
 
 
+#ifdef DEBUGMODE
 void	count_whowas_memory(wwu, wwa, wwam)
 int	*wwu, *wwa;
 u_long	*wwam;
@@ -191,7 +199,7 @@ u_long	*wwam;
 	u_long	am = 0;
 
 	for (i = 0; i < NICKNAMEHISTORYLENGTH; i++)
-		if ((tmp = was[i].ww_user))
+		if (tmp = was[i].ww_user)
 			if (!was[i].ww_online)
 			    {
 				for (j = 0; j < i; j++)
@@ -212,3 +220,4 @@ u_long	*wwam;
 
 	return;
 }
+#endif

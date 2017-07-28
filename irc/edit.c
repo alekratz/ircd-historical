@@ -24,11 +24,7 @@ char edit_id[] = "edit.c v2.0 (c) 1988 University of Oulu, Computing\
 #include <curses.h>
 #include <signal.h>
 #include "struct.h"
-#ifdef  UNISTDH
-#include <unistd.h>
-#endif
 #include "common.h"
-#include "irc.h"
 
 #define FROM_START 0
 #define FROM_END   1
@@ -38,29 +34,7 @@ extern int termtype;
 static int esc=0;
 static int literal=0;
 
-void word_back();
-void word_forw();
-void del_word_left();
-void del_word_right();
-void toggle_ins();
-void do_after_esc();
-void back_ch();
-void rev_line();
-void del_ch_right();
-void eol();
-void forw_ch();
-void add_ch();
-void del_ch_left();
-void kill_eol();
-void refresh_screen();
-void next_in_history();
-void previous_in_history();
-void kill_whole_line();
-void literal_next();
-void got_esc();
-void set_position();
-
-int do_char(ch)
+do_char(ch, sock)
 char ch;
 {
 	static	int	first_time=0;
@@ -110,17 +84,16 @@ char ch;
 		toggle_ins();		/* toggle insert mode */
 		break;
 	case '\012':		/* ^J */
-		send_this_line();	/* send this line */
+		send_this_line(sock);	/* send this line */
 		break;
 	case '\013':		/* ^K */
 		kill_eol();		/* kill to end of line */
 		break;
 	case '\014':		/* ^L */
 		refresh_screen();	/* refresh screen */
-		write_statusline();
 		break;
 	case '\015':		/* ^M */
-		send_this_line();	/* send this line */
+		send_this_line(sock);	/* send this line */
 		break;
 	case '\016':		/* ^N */
 		next_in_history();	/* next in history */
@@ -166,28 +139,28 @@ char ch;
 	return tulosta_viimeinen_rivi();
 }
 
-void bol()
+bol()
 {
 	set_position(0, FROM_START);
 }
 
-void eol()
+eol()
 {
 	set_position(0, FROM_END);
 	set_position(1, RELATIVE);
 }
 
-void back_ch()
+back_ch()
 {
 	set_position(-1, RELATIVE);
 }
 
-void forw_ch()
+forw_ch()
 {
 	set_position(1, RELATIVE);
 }
 
-void rev_line()
+rev_line()
 {
 	int	i1, i2, i3, i4;
 
@@ -205,30 +178,31 @@ void rev_line()
 	}
 }
 
-void del_ch_right()
+del_ch_right()
 {
 	int	i1, i2, i3;
 
 	i1 = get_position();
 
 	if (!get_char(i1))
-		return;			/* last char in line */
+		return 0;			/* last char in line */
 	set_position(0, FROM_END);
 	i2 = get_position();
 	for (i3 = i1; i3 < i2; i3++)
 		set_char(i3, get_char(i3+1));
 	set_char(i3, 0);
 	set_position(i1, FROM_START);
+	return 0;
 }
 
-void del_ch_left()
+del_ch_left()
 {
 	int	i1, i2, i3;
 
 	i1 = get_position();
 
 	if (!i1)
-		return;			/* first pos in line */
+		return 0;			/* first pos in line */
 	set_position(0, FROM_END);
 	i2 = get_position();
 	for (i3 = i1-1; i3 < i2; i3++)
@@ -236,61 +210,34 @@ void del_ch_left()
 	set_char(i3, 0);
 	set_position(i1, FROM_START);
 	set_position(-1, RELATIVE);
+	return 0;
 }
 
-void suspend_irc()
+suspend_irc()
 {
-#if defined(HPUX) || defined(mips) || defined(AIX) || defined(SOL20) || \
-    defined(_SEQUENT_) || defined(linux) || defined(SVR4)
-	signal(SIGTSTP, (void(*)PROTO((int)))suspend_irc);
-#ifdef DOCURSES
-                if (termtype == CURSES_TERM) {
-                        echo();
-                        nocrmode();
-                } 
-#endif /* DOCURSES */
-#ifdef DOTERMCAP
-                if (termtype == TERMCAP_TERM)
-                        io_off();
-#endif /* DOTERMCAP */
+#if defined(HPUX) || defined(mips) || defined(AIX) || defined(SOL20)
 #ifdef SIGSTOP
 	kill(getpid(), SIGSTOP);
-#endif /* SIGSTOP */
-#ifdef DOCURSES
-                if (termtype == CURSES_TERM) {
-                        /* initscr(); */
-                        noecho();
-                        crmode();
-                        clear();
-                        refresh();
-                }
-#endif /* DOCURSES */
-#ifdef DOTERMCAP
-                if (termtype == TERMCAP_TERM) {
-                        io_on(1);
-                        clearscreen();
-                }
-#endif /* DOTERMCAP */
-		write_statusline();
-#else /* || */
-#if !defined(VMS) && !defined(SVR3)
+#endif
+#else
+#if !VMS
 	tstp(); 
-#endif /* !VMS */
-#endif /* || */
+#endif
+#endif
 }
 
-void got_esc()
+got_esc()
 {
 	esc = 1;
 }
 
-void do_after_esc(ch)
+do_after_esc(ch)
 char ch;
 {
 	if (literal) {
 		literal = 0;
 		add_ch(ch);
-		return;
+		return 0;
 	}
 	esc = 0;
 	switch (ch)
@@ -313,9 +260,10 @@ char ch;
 	default:
 		break;
 	}
+	return 0;
 }
 
-void refresh_screen()
+refresh_screen()
 {
 #ifdef DOCURSES
 	if (termtype == CURSES_TERM) {
@@ -325,7 +273,7 @@ void refresh_screen()
 #endif
 }
 
-void add_ch(ch)
+add_ch(ch)
 int	ch;
 {
 	int	i1, i2, i3;
@@ -347,25 +295,25 @@ int	ch;
 	}
 }
 
-void literal_next()
+literal_next()
 {
 	got_esc();
 	literal=1;
 }
 
-void word_forw()
+word_forw()
 {
 	int	i1,i2;
 
 	i1 = get_position();
 
-	while ((i2 = get_char(i1)))
+	while (i2 = get_char(i1))
 		if ((i2 == (int)' ') || (i2 == (int)'\t') ||
 		    (i2 == (int)'_') || (i2 == (int)'-'))
 			i1++;
 		else
 			break;
-	while ((i2 = get_char(i1)))
+	while (i2 = get_char(i1))
 		if ((i2 == (int)' ') || (i2 == (int)'\t') ||
 		    (i2 == (int)'_') || (i2 == (int)'-'))
 			break;
@@ -374,7 +322,7 @@ void word_forw()
 	set_position(i1, FROM_START);
 }
 
-void word_back()
+word_back()
 {
 	int	i1,i2;
 
@@ -382,13 +330,13 @@ void word_back()
 	if (i1 != 0)
 		i1--;
 
-	while ((i2 = get_char(i1)))
+	while (i2 = get_char(i1))
 		if ((i2 == (int)' ') || (i2 == (int)'\t') ||
 		    (i2 == (int)'_') || (i2 == (int)'-'))
 			i1--;
 		else
 			break;
-	while ((i2 = get_char(i1)))
+	while (i2 = get_char(i1))
 		if ((i2 == (int)' ') || (i2 == (int)'\t') ||
 		    (i2 == (int)'_') || (i2 == (int)'-'))
 			break;
@@ -401,7 +349,7 @@ void word_back()
 	set_position(i1, FROM_START);
 }
 
-void del_word_left()
+del_word_left()
 {
 	int	i1, i2, i3, i4;
 
@@ -417,7 +365,7 @@ void del_word_left()
 	set_position(i2, FROM_START);
 }
 
-void del_word_right()
+del_word_right()
 {
 	int	i1, i2, i3, i4;
 

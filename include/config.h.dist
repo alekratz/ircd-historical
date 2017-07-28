@@ -17,26 +17,20 @@
  *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#ifndef	__config_include__
-#define	__config_include__
-
-#include "setup.h"
-
 /* Type of host. These should be made redundant somehow. -avalon */
 
-/*	BSD			Nothing Needed 4.{2,3} BSD, SunOS 3.x, 4.x */
-/*	HPUX			Nothing needed (A.08/A.09) */
-/*	ULTRIX			Nothing needed (4.2) */
-/*	OSF			Nothing needed (1.2) */
+#define	BSD			/* 4.2 BSD, 4.3 BSD, SunOS 3.x, 4.x, Apollo */
+/*	HPUX			Nothing needed (A.08.07) */
+/*	ULTRIX			Nothing needed (4.2) *
+/*	OSF			Nothing needed (1.2) *
 #undef	AIX			/* IBM ugly so-called Unix, AIX */
 #undef	MIPS			/* MIPS Unix */
 /*	SGI			Nothing needed (IRIX 4.0.4) */
-#undef 	SVR3			/* SVR3 stuff - being worked on where poss. */
-#undef	DYNIXPTX		/* Sequents Brain-dead Posix implement. */
+#undef	SVR3			/* SVR3 stuff - being worked on where poss. */
+#undef	DYNIXPTX		/* Sequents Brain-dead Posix implement.
+				 * Also #define SYSV
+				 */
 #undef	SOL20			/* Solaris2 */
-#undef	ESIX			/* ESIX */
-#undef	NEXT			/* NeXTStep */
-#undef        SVR4
 
 /* Do these work? I dunno... */
 
@@ -45,9 +39,67 @@
 #undef	PCS			/* PCS Cadmus MUNIX, use with BSD flag! */
 
 /*
+ * getrusage(2) is a BSDism used in s_misc.c. If you have both of these
+ * use GETRUSEAGE_2 unless you get some compile time errors in which case
+ * try TIMES_2. If both fail, #undef them both. -avalon
+ */
+#define	GETRUSAGE_2             /* if your system supports getrusage(2) */
+#undef	TIMES_2                 /* or if it supports this. yuck. */
+ 
+/*
+ * The following are additional symbols to define. If you are not
+ * sure about them, leave them all defined as they are.
+ *
+ * NOTE: *BEFORE* undefining NEED_STRERROR, check to see if your library
+ *	 version returns NULL on an unknown error. If so, then I strongly
+ *	 recommend you use this version as provided.
+ *
+ * If you get loader errors about unreferenced function calls, you must
+ * define the following accordingly:
+ */
+#if defined(NEXT) || defined(HPUX) || defined(AIX)
+#undef	NEED_STRERROR
+#else
+#define	NEED_STRERROR		/* Your libc.a not ANSI-compatible and has */
+				/* no strerror() */
+#endif
+
+#define	NEED_STRTOKEN		/* Your libc.a does not have strtoken(3) */
+#undef	NEED_STRTOK		/* Your libc.a does not have strtok(3) */
+#undef	NEED_INET_ADDR  	/* You need inet_addr(3)	*/
+#undef	NEED_INET_NTOA  	/* You need inet_ntoa(3)	*/
+#undef	NEED_INET_NETOF 	/* You need inet_netof(3)	*/
+#undef	NEED_STRCASECMP		/* Your libc.a does not have strcasecmp(3s)
+				 * which also implies strncasecmp(3s) */
+/*
  * NOTE: On some systems, valloc() causes many problems.
  */
 #undef	VALLOC			/* Define this if you have valloc(3) */
+
+/*
+ * The following is fairly system dependent and is important that you
+ * get it right. Use *ONE* of these as your #define and *ONE ONLY*.
+ * Where and if possible, check for and use POSIX_SIGNALS since any POSIX
+ * compliant vendor is very unlikely to not have a working sigaction().
+ *
+ * define this if your signal() calls DONT get reset back to the default
+ * action when a signal is trapped. BSD signals are by reliable.
+ */
+#define	BSD_RELIABLE_SIGNALS
+/*
+ * if you are on a sysv-ish system, your signals arent reliable.
+ */
+#undef	SYSV_UNRELIABLE_SIGNALS
+/*
+ * Define POSIX_SIGNALS if your system has the POSIX signal library.
+ *
+ * Dynix/ptx users should define this and not the others above as well as
+ * DYNIXPTX above.
+ *
+ * POSIX_SIGNALS are RELIABLE. NOTE: these may *NOT* be used automatically
+ * by your system when you compile so define here to make sure.
+ */
+#undef	POSIX_SIGNALS
 
 #ifdef APOLLO
 #define	RESTARTING_SYSTEMCALLS
@@ -110,10 +162,10 @@
  * into this server. Logging will stop when the file does not exist.
  * Logging will be disable also if you do not define this.
  * FNAME_USERLOG just logs user connections, FNAME_OPERLOG logs every
- * successful use of /oper.  These are either full paths or files within DPATH.
+ * successful use of /oper
  */
 /* #define FNAME_USERLOG "/usr/local/lib/ircd/users" /* */
-/* #define FNAME_OPERLOG "/usr/local/lib/ircd/opers" /* */
+/* #define FNAME_OPERLOG "/usr/local/lib/ircd/users" /* */
 
 /* CHROOTDIR
  *
@@ -160,18 +212,13 @@
  * commands however.  OPER_REHASH and OPER_RESTART allow operators to
  * issue the REHASH and RESTART commands when connected to your server.
  * Left undefined they increase the security of your server from wayward
- * operators and accidents.  Defining OPER_REMOTE removes the restriction
- * that O-lines only become fully effective for people on the 'same network'
- * as the server.  Undefined, it increases the secrity of the server by
- * placing restrictions on where people can use operator powers from.
- * The 'LOCOP_' #defines are for making the respective commands available
- * to 'local' operators.
+ * operators and accidents.  The 'LOCOP_' #defines are for making the
+ * respective commands available to 'local' operators.
  */
 #undef	OPER_KILL
 #undef	OPER_REHASH
 #undef	OPER_RESTART
 #undef	OPER_DIE
-#undef	OPER_REMOTE
 #undef	LOCOP_REHASH
 #undef	LOCOP_RESTART
 #undef	LOCOP_DIE
@@ -252,7 +299,7 @@
  * The server will then call m4 each time it reads the ircd.conf file,
  * reading m4 output as the server's ircd.conf file.
  */
-#define	M4_PREPROC
+#undef	M4_PREPROC
 
 /*
  * If you wish to have the server send 'vital' messages about server
@@ -264,7 +311,7 @@
  */
 #undef	USE_SYSLOG
 
-#ifdef	USE_SYSLOG
+#ifdef USE_SYSLOG
 /*
  * If you use syslog above, you may want to turn some (none) of the
  * spurious log messages for KILL/SQUIT off.
@@ -286,7 +333,7 @@
  * define this if you want to use crypted passwords for operators in your
  * ircd.conf file. See ircd/crypt/README for more details on this.
  */
-#define	CRYPT_OPER_PASSWORD
+#undef	CRYPT_OPER_PASSWORD
 
 /*
  * If you want to store encrypted passwords in N-lines for server links,
@@ -315,12 +362,26 @@
  * Max amount of internal send buffering when socket is stuck (bytes)
  */
 #define MAXSENDQLENGTH 100000    /* Recommended value: 100000 for leaves */
-                                 /*                    900000 for backbones */
+                                 /*                    300000 for backbones */
+
 /*
- *  BUFFERPOOL is the maximum size of the total of all sendq's.
- *  Recommended value is 2 * MAXSENDQLENGTH, for hubs, 5 *.
+ * Use our "ctype.h" defines (islower(),isupper(),tolower(),toupper(), etc).
+ * These are all table referencing macros and are 'quicker' than on some
+ * systems, and they provide consistant ANSI behavior for the Finnish character
+ * set no mater how broken the host OS is or what language things are.
+ * IRC expects []{}\| and A-Za-z to behave properly as upper/lower case,
+ * and if this isn't true bad things can happen.
+ *
+ * THE CODE ASSUMES THAT tolower AND toupper DO NOT DESTROY CHARACTERS
+ * THEY ARE NOT CHANGING. This is ANSI, but not old-style K&R. In particular,
+ * you cannot just use the standard SunOS 4.1.1 ctype macros and have
+ * the server work.
+ *
+ * Our code assumes EOF is -1. If that isn't true on your system, don't
+ * use our ctype, but make sure yours understands { is lower case [, and
+ * so on for }] and |\.
  */
-#define	BUFFERPOOL     (2 * MAXSENDQLENGTH)
+#define USE_OUR_CTYPE
 
 /*
  * use these to setup a Unix domain socket to connect clients/servers to.
@@ -342,27 +403,18 @@
 #define	IRC_GID	65534
 #endif
 
-/*
- * CLIENT_FLOOD
- *
- * this controls the number of bytes the server will allow a client to
- * send to the server without processing before disconnecting the client for
- * flooding it.  Values greater than 8000 make no difference to the server.
- */
-#define	CLIENT_FLOOD	1024
-
 /* Default server for standard client */
 #define	UPHOST	"coombs.anu.edu.au"
 
 /* Define this if you want the server to accomplish ircII standard */
 /* Sends an extra NOTICE in the beginning of client connection     */
-#undef	IRCII_KLUDGE
+#define	IRCII_KLUDGE
 
 /*   STOP STOP STOP STOP STOP STOP STOP STOP STOP STOP STOP STOP STOP STOP  */
 
 /* You shouldn't change anything below this line, unless absolutely needed. */
 
-#ifdef	OPER_KILL
+#ifdef  OPER_KILL
 /* LOCAL_KILL_ONLY
  *
  * To be used, OPER_KILL must be defined.
@@ -375,7 +427,7 @@
  *	 of KILL for non-local clients should be punished by removal of the
  *	 server's links (if only for ignoring this warning!).
  */
-#define	LOCAL_KILL_ONLY
+#undef  LOCAL_KILL_ONLY
 #endif
 /*
  * Port where ircd resides. NOTE: This *MUST* be greater than 1024 if you
@@ -397,10 +449,20 @@
 #define MAXCONNECTIONS	50
 
 /*
- * This defines the length of the nickname history.  each time a user changes
+ * this defines the length of the nickname history.  each time a user changes
  * nickname or signs off, their old nickname is added to the top of the list.
+ * The following sizes are recommended:
+ * 8MB or less  core memory : 500	(at least 1/4 of max users)
+ * 8MB-16MB     core memory : 500-750	(1/4 -> 1/2 of max users)
+ * 16MB-32MB    core memory : 750-1000	(1/2 -> 3/4 of max users)
+ * 32MB or more core memory : 1000+	(> 3/4 if max users)
+ * where max users is the expected maximum number of users.
+ * (100 nicks/users ~ 25k)
+ * NOTE: this is directly related to the amount of memory ircd will use whilst
+ *	 resident and running - it hardly ever gets swapped to disk! You can
+ *	 ignore these recommendations- they only are meant to serve as a guide
  */
-#define NICKNAMEHISTORYLENGTH 4096
+#define NICKNAMEHISTORYLENGTH 800
 
 /*
  * Time interval to wait and if no messages have been received, then check for
@@ -445,7 +507,7 @@
  * CONNECTTIMEOUT - 10 seconds for its host to respond to an ident lookup
  * query and for a DNS answer to be retrieved.
  */
-#define	CONNECTTIMEOUT	30	/* Recommended value: 30 */
+#define	CONNECTTIMEOUT     30	/* Recommended value: 30 */
 
 /*
  * Max time from the nickname change that still causes KILL
@@ -483,11 +545,6 @@
 #endif
 #endif
 
-#ifdef _SEQUENT_		/* Dynix 1.4 or 2.0 Generic Define.. */
-#undef BSD
-#define SYSV			/* Also #define SYSV */
-#endif
-
 #ifdef	ultrix
 #define	ULTRIX
 #endif
@@ -502,7 +559,6 @@
 
 #ifdef	CLIENT_COMPILE
 #undef	SENDQ_ALWAYS
-#undef	NPATH		/* _dl */
 #endif
 
 #ifdef DEBUGMODE
@@ -522,6 +578,15 @@ extern	void	debug();
 #  undef LEAST_IDLE
 #endif
 
+#ifndef DEBUGMODE
+#undef	GETRUSAGE_2
+#undef	TIMES_2
+#endif
+
+#ifdef	CLIENT_COMPILE
+#undef	SENDQ_ALWAYS
+#endif
+
 #if defined(mips) || defined(PCS)
 #undef SYSV
 #endif
@@ -535,8 +600,8 @@ extern	void	debug();
 #define SEQ_NOFILE    128        /* set to your current kernel impl, */
 #endif                           /* max number of socket connections */
 
-#ifdef _SEQUENT_
-#define	DYNIXPTX
+#ifdef	DYNIXPTX
+#define	POSIX_SIGNALS
 #endif
 
 #ifdef	BSD_RELIABLE_SIGNALS
@@ -546,26 +611,22 @@ error You stuffed up config.h signals #defines use only one.
 #define	HAVE_RELIABLE_SIGNALS
 #endif
 
-#ifdef	SYSV_UNRELIABLE_SIGNALS
+#ifdef	SYSYV_UNRELIABLE_SIGNALS
 # ifdef	POSIX_SIGNALS
 error You stuffed up config.h signals #defines use only one.
 # endif
 #undef	HAVE_RELIABLE_SIGNALS
 #endif
 
-#ifdef	POSIX_SIGNALS
+#ifdef POSIX_SIGNALS
 #define	HAVE_RELIABLE_SIGNALS
 #endif
 
-#ifdef	CLIENT_COMPILE
-#undef	SENDQ_ALWAYS
+#ifndef	HUB
+#define	MAXIMUM_LINKS	1
+#undef	MAXSENDQLENGTH
+#define	MAXSENDQLENGTH	100000
 #endif
-
-/*
- * safety margin so we can always have one spare fd, for motd/authd or
- * whatever else.  -4 allows "safety" margin of 1 and space reserved.
- */
-#define	MAXCLIENTS	(MAXCONNECTIONS-4)
 
 #ifdef HAVECURSES
 # define DOCURSES
@@ -581,14 +642,6 @@ error You stuffed up config.h signals #defines use only one.
 
 #ifndef	UNIXPORT
 #undef	UNIXPORTPATH
-#endif
-
-#if defined(CLIENT_FLOOD)
-# if	(CLIENT_FLOOD > 8000) || (CLIENT_FLOOD < 512)
-error CLIENT_FLOOD needs redefining.
-# endif
-#else
-error CLIENT_FLOOD undefined
 #endif
 
 /*
@@ -618,5 +671,9 @@ error CLIENT_FLOOD undefined
 #define Reg8 register
 #define Reg9 register
 #define Reg10 register
-
-#endif /* __config_include__ */
+#define Reg11 
+#define Reg12 
+#define Reg13 
+#define Reg14 
+#define Reg15 
+#define Reg16

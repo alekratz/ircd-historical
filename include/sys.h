@@ -25,34 +25,30 @@
 #include <sys/errno.h>
 #endif
 
-#include "setup.h"
-#include <stdio.h>
-#include <sys/types.h>
-#include <sys/param.h>
-
-#ifdef	UNISTDH
+#if !defined(mips) || defined(SGI) || defined(ULTRIX)
 #include <unistd.h>
 #endif
-#ifdef	STDLIBH
+#if defined(HPUX) || defined(sun)
 #include <stdlib.h>
 #endif
 
-#ifdef	STRINGSH
-#include <strings.h>
-#else
-# ifdef	STRINGH
-# include <string.h>
+#if defined(HPUX) || defined(VMS) || defined(AIX) || defined(SOL20)
+#include <string.h>
+#define bcopy(a,b,s)  memcpy(b,a,s)
+#define bzero(a,s)    memset(a,0,s)
+#define bcmp          memcmp
+# ifndef AIX
+extern char *strchr(), *strrchr();
+extern char *inet_ntoa();
+#define index strchr
+#define rindex strrchr
 # endif
-#endif
-#define	strcasecmp	mycmp
-#define	strncasecmp	myncmp
-#ifdef NOINDEX
-#define   index   strchr
-#define   rindex  strrchr
-/*
-extern	char	*index PROTO((char *, char));
-extern	char	*rindex PROTO((char *, char));
-*/
+#else 
+#include <strings.h>
+extern	char	*index();
+extern	char	*rindex();
+extern	int	strcasecmp();
+extern	int	strncasecmp();
 #endif
 
 #ifdef AIX
@@ -67,21 +63,20 @@ extern	char	*rindex PROTO((char *, char));
 #include <sys/time.h>
 #endif
 
-#if !defined(DEBUGMODE) || defined(CLIENT_COMPILE)
-#define MyFree(x)       if ((x) != NULL) free(x)
-#else
-#define	free(x)		MyFree(x)
-#endif
-
 #ifdef NEXT
 #define VOIDSIG int	/* whether signal() returns int of void */
 #else
 #define VOIDSIG void	/* whether signal() returns int of void */
 #endif
 
-extern	VOIDSIG	dummy();
+extern VOIDSIG dummy(), restart();
 
 #ifdef	DYNIXPTX
+#define	bcopy(a,b,s)	memcpy(b,a,s)
+#define	bzero(a,s)	memset(a,0,s)
+#define	bcmp		memcmp
+#define index strchr
+#define rindex strrchr
 #define	NO_U_TYPES
 #endif
 

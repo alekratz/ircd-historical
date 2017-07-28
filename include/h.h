@@ -63,11 +63,11 @@ extern	aConfItem *find_conf_ip PROTO((Link *, char *, char *, int));
 extern	aConfItem *find_conf_name PROTO((char *, int));
 extern	int	find_kill PROTO((aClient *));
 extern	int	find_restrict PROTO((aClient *));
-extern	int	rehash PROTO((aClient *, aClient *, int));
+extern	int	rehash PROTO((int));
 extern	int	initconf PROTO((int));
 
 extern	char	*MyMalloc PROTO((int)), *MyRealloc PROTO((char *, int));
-extern	char	*debugmode, *configfile, *sbrk0;
+extern	char	*debugmode, *configfile;
 extern	char	*getfield PROTO((char *));
 extern	void	get_sockhost PROTO((aClient *, char *));
 extern	char	*rpl_str PROTO((int)), *err_str PROTO((int));
@@ -79,7 +79,7 @@ extern	int	dbufalloc, dbufblocks, debuglevel, errno, h_errno;
 extern	int	highest_fd, debuglevel, portnum, debugtty, maxusersperchannel;
 extern	int	readcalls, udpfd, resfd;
 extern	aClient	*add_connection PROTO((aClient *, int));
-extern	int	add_listener PROTO((aConfItem *));
+extern	int	add_listener PROTO((char *, int));
 extern	void	add_local_domain PROTO((char *, int));
 extern	int	check_client PROTO((aClient *));
 extern	int	check_server PROTO((aClient *, struct hostent *, \
@@ -93,7 +93,6 @@ extern	int	get_sockerr PROTO((aClient *));
 extern	int	inetport PROTO((aClient *, char *, int));
 extern	void	init_sys PROTO(());
 extern	int	read_message PROTO((time_t));
-extern	void	report_error PROTO((char *, aClient *));
 extern	void	set_non_blocking PROTO((int, aClient *));
 extern	int	setup_ping PROTO(());
 extern	void	summon PROTO((aClient *, char *, char *, char *));
@@ -141,7 +140,6 @@ extern	int	deliver_it PROTO((aClient *, char *, int));
 extern	int	check_registered PROTO((aClient *));
 extern	int	check_registered_user PROTO((aClient *));
 extern	char	*get_client_name PROTO((aClient *, int));
-extern	char	*get_client_host PROTO((aClient *));
 extern	char	*my_name_for_link PROTO((char *, aConfItem *));
 extern	char	*myctime PROTO((time_t)), *date PROTO((time_t));
 extern	int	exit_client PROTO((aClient *, aClient *, aClient *, char *));
@@ -159,11 +157,10 @@ extern	void	send_umode PROTO((aClient *, aClient *, int, int, char *));
 extern	void	send_umode_out PROTO((aClient*, aClient *, int));
 #endif
 
-extern	void	free_client PROTO((aClient *));
 extern	void	free_link PROTO((Link *));
 extern	void	free_conf PROTO((aConfItem *));
 extern	void	free_class PROTO((aClass *));
-extern	void	free_user PROTO((anUser *, aClient *));
+extern	void	free_user PROTO((anUser *));
 extern	Link	*make_link PROTO(());
 extern	anUser	*make_user PROTO((aClient *));
 extern	aConfItem *make_conf PROTO(());
@@ -176,14 +173,13 @@ extern	void	checklist PROTO(());
 extern	void	remove_client_from_list PROTO((aClient *));
 extern	void	initlists PROTO(());
 
-extern	void	add_class PROTO((int, int, int, int, long));
-extern	void	fix_class PROTO((aConfItem *, aConfItem *));
+extern	void    add_class PROTO((int, int, int, int, long));
 extern	long	get_sendq PROTO((aClient *));
 extern	int	get_con_freq PROTO((aClass *));
 extern	int	get_client_ping PROTO((aClient *));
-extern	int	get_client_class PROTO((aClient *));
-extern	int	get_conf_class PROTO((aConfItem *));
-extern	void	report_classes PROTO((aClient *));
+extern	int     get_client_class PROTO((aClient *));
+extern	int     get_conf_class PROTO((aConfItem *));
+extern	void    report_classes PROTO((aClient *));
 
 extern	struct	hostent	*get_res PROTO((char *));
 extern	struct	hostent	*gethost_byaddr PROTO((char *, Link *));
@@ -192,7 +188,7 @@ extern	void	flush_cache PROTO(());
 extern	int	init_resolver PROTO((int));
 extern	time_t	timeout_query_list PROTO((time_t));
 extern	time_t	expire_cache PROTO((time_t));
-extern	void    del_queries PROTO((char *));
+extern	void    del_queries PROTO((aClient *));
 
 extern	void	clear_channel_hash_table PROTO(());
 extern	void	clear_client_hash_table PROTO(());
@@ -218,9 +214,3 @@ extern	char	*mycncmp PROTO((char *, char *));
 
 /*VARARGS2*/
 extern	void	debug();
-#if defined(DEBUGMODE) && !defined(CLIENT_COMPILE)
-extern	void	send_usage PROTO((aClient *, char *));
-extern	void	send_listinfo PROTO((aClient *, char *));
-extern	void	count_memory PROTO((aClient *, char *));
-#endif
-

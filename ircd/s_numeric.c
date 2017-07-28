@@ -20,7 +20,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)s_numeric.c	2.14 1/30/94 (C) 1988 University of Oulu, \
+static  char sccsid[] = "@(#)s_numeric.c	2.11 12/20/92 (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 
@@ -81,9 +81,9 @@ char	*parv[];
 		(void)strcat(buffer, " :");
 		(void)strcat(buffer, parv[parc-1]);
 	    }
-	for (; (nick = strtoken(&p, parv[1], ",")); parv[1] = NULL)
+	for (; nick = strtoken(&p, parv[1], ","); parv[1] = NULL)
 	    {
-		if ((acptr = find_client(nick, (aClient *)NULL)))
+		if (acptr = find_client(nick, (aClient *)NULL))
 		    {
 			/*
 			** Drop to bit bucket if for me...
@@ -92,27 +92,17 @@ char	*parv[];
 			** And so it was done. -avalon
 			** And regretted. Dont do it that way. Make sure
 			** it goes only to non-servers. -avalon
-			** Check added to make sure servers don't try to loop
-			** with numerics which can happen with nick collisions.
-			** - Avalon
 			*/
-			if (!IsMe(acptr) && IsPerson(acptr))
-				sendto_prefix_one(acptr, sptr,":%s %d %s%s",
-					parv[0], numeric, nick, buffer);
-			else if (IsServer(acptr) && acptr->from != cptr)
-				sendto_prefix_one(acptr, sptr,":%s %d %s%s",
-					parv[0], numeric, nick, buffer);
+		    if (!IsMe(acptr) && !IsServer(acptr))
+			sendto_prefix_one(acptr, sptr,":%s %d %s%s", parv[0],
+					  numeric, nick, buffer);
 		    }
-		else if ((acptr = find_server(nick, (aClient *)NULL)))
-		    {
-			if (!IsMe(acptr) && acptr->from != cptr)
-				sendto_prefix_one(acptr, sptr,":%s %d %s%s",
-					parv[0], numeric, nick, buffer);
-		    }
-		else if ((chptr = find_channel(nick, (aChannel *)NULL)))
+		else if (chptr = find_channel(nick, (aChannel *)NULL))
 			sendto_channel_butone(cptr,sptr,chptr,":%s %d %s%s",
 					      parv[0],
 					      numeric, chptr->chname, buffer);
 	    }
 	return 0;
 }
+
+

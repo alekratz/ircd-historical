@@ -17,19 +17,19 @@
 #*   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 #*/
 
-CC=cc
+CC=cc 
 RM=/bin/rm
 INCLUDEDIR=../include
 
 # Default flags:
-CFLAGS= -I$(INCLUDEDIR) -O
-#IRCDLIBS=
+CFLAGS= -I$(INCLUDEDIR) -g
+IRCDLIBS=
 IRCLIBS=-lcurses -ltermcap
 #
 # use the following on MIPS:
 #CFLAGS= -systype bsd43 -DSYSTYPE_BSD43 -I$(INCLUDEDIR)
 # For Irix 4.x (SGI), use the following:
-#CFLAGS= -g -cckr -I$(INCLUDEDIR)
+#CFLAGS= -g -cckr -I${INCLUDE}
 #
 # on NEXT use:
 #CFLAGS=-bsd -I$(INCLUDEDIR)
@@ -37,41 +37,24 @@ IRCLIBS=-lcurses -ltermcap
 #IRCDLIBS=-lsys_s
 #
 # AIX 370 flags
-#CFLAGS=-D_BSD -Hxa -I$(INCLUDEDIR)
+#CLFAGS=-D_BSD -Hxa
 #IRCDLIBS=-lbsd
 #IRCLIBS=-lcurses -lcur
 #
-# Dynix/ptx V2.0.x
-#CFLAGS= -I$(INCLUDEDIR) -O -Xo
-#IRCDLIBS= -lsocket -linet -lnsl -lseq
-#IRCLIBS=-ltermcap -lcurses -lsocket -linet -lnsl -lseq
-# 
-# Dynix/ptx V1.x.x
-#IRCDLIBS= -lsocket -linet -lnsl -lseq
+# Dynix/ptx V1.3.1
+#IRCDLIBS= -lsocket -linet -lseq -lnsl
 #
 #use the following on SUN OS without nameserver libraries inside libc
-#IRCDLIBS=-lresolv
+#IRCDLIBS= -lresolv
 #
-# Solaris 2
-#IRCDLIBS=-lsocket -lnsl
-#IRCLIBS=-lcurses -ltermcap -lresolv -lsocket -lnsl
-#
-# ESIX
-#CFLAGS=-O -I$(INCLUDEDIR) -I/usr/ucbinclude
-#IRCDLIBS=-L/usr/ucblib -L/usr/lib -lsocket -lucb -lns -lnsl
-#
+# Solaris 2.0
+#IRCDLIBS= -lsocket -lnsl
+#IRCLIBS=-lcurses -ltermcap -lsocket -lnsl
+
 # LDFLAGS - flags to send the loader (ld). SunOS users may want to add
 # -Bstatic here.
 #
 #LDFLAGS=-Bstatic
-#
-#Dell SVR4
-#CC=gcc
-#CFLAGS= -I$(INCLUDEDIR) -O2
-#IRCDLIBS=-lsocket -lnsl -lucb
-#IRCLIBS=-lcurses -lresolv -lsocket -lnsl -lucb
-
-
 
 # IRCDMODE is the mode you want the binary to be.
 # The 4 at the front is important (allows for setuidness)
@@ -82,18 +65,17 @@ IRCDMODE = 711
 
 # IRCDDIR must be the same as DPATH in include/config.h
 #
-IRCDDIR=/usr/local/src/ircd
+IRCDDIR=/usr/local/lib/ircd
 
 SHELL=/bin/sh
 SUBDIRS=common ircd irc
-BINDIR=$(IRCDDIR)
+BINDIR=/usr/local/bin
 MANDIR=/usr/local/man
 INSTALL=/usr/bin/install
 
-MAKE=make 'CFLAGS=${CFLAGS}' 'CC=${CC}' 'IRCDLIBS=${IRCDLIBS}' \
-	'LDFLAGS=${LDFLAGS}' 'IRCDMODE=${IRCDMODE}' 'BINDIR=${BINDIR}' \
-	'INSTALL=${INSTALL}' 'IRCLIBS=${IRCLIBS}' 'INCLUDEDIR=${INCLUDEDIR}' \
-	'IRCDDIR=${IRCDDIR}' 'MANDIR=${MANDIR}'
+MAKE = make 'CFLAGS=${CFLAGS}' 'CC=${CC}' 'IRCDLIBS=${IRCDLIBS}' \
+            'LDFLAGS=${LDFLAGS}' 'IRCDMODE=${IRCDMODE}' 'BINDIR=${BINDIR}' \
+            'INSTALL=${INSTALL}' 'IRCLIBS=${IRCLIBS}' 'IRCDDIR=${IRCDDIR}'
 
 all:	build
 
@@ -104,11 +86,6 @@ client:
 	@echo 'Making client'; cd irc; ${MAKE} build; cd ..;
 
 build:
-	-@if [ ! -f include/setup.h ] ; then \
-		echo "Hmm...doesn't look like you've run Config..."; \
-		echo "Doing so now."; \
-		sh Config; \
-	fi
 	@for i in $(SUBDIRS); do \
 		echo "Building $$i";\
 		cd $$i;\
@@ -122,9 +99,6 @@ clean:
 		cd $$i;\
 		${MAKE} clean; cd ..;\
 	done
-	-@if [ -f include/setup.h ] ; then \
-	echo "To really restart installation, remove include/setup.h" ; \
-	fi
 
 depend:
 	@for i in $(SUBDIRS); do \
@@ -134,12 +108,13 @@ depend:
 	done
 
 install: all
-	chmod +x ./bsdinstall
-	@for i in ircd irc doc; do \
+	@for i in ircd irc; do \
 		echo "Installing $$i";\
 		cd $$i;\
 		${MAKE} install; cd ..;\
 	done
+	${INSTALL} -c doc/ircd.8 ${MANDIR}/man8
+	${INSTALL} -c doc/irc.1 ${MANDIR}/man1
 
 
 rcs:
