@@ -38,6 +38,7 @@ char c_numeric_id[] = "numeric.c (c) 1989 Jarkko Oikarinen";
 #include "msg.h"
 #include "sys.h"
 #include "h.h"
+#include "irc.h"
 
 extern char mybuf[];
 /*
@@ -66,9 +67,9 @@ char	*parv[];
 	switch (numeric)
 	    {
 	    case ERR_NOSUCHNICK:
-		sprintf(mybuf, "*** Error: %s: No such nickname (%s)",
-			parv[0], parv[2]);
-		sendto_one(&me, "WHOWAS %s", parv[2]);
+		sprintf(mybuf, "*** Error: %s: %s (%s)",
+			parv[0], parv[3], parv[2]);
+		sendto_one(&me, "WHOWAS %s 1", parv[2]);
 		break;
 	    case ERR_WASNOSUCHNICK:
 		mybuf[0] = '\0';
@@ -124,11 +125,11 @@ char	*parv[];
 	    case ERR_NICKNAMEINUSE:
 		sprintf(mybuf,
 			"*** Error: %s: Nickname %s is already in use. %s",
-			parv[0], parv[1], "Please choose another.");
+			parv[0], parv[2], "Please choose another.");
 		break;
 	    case ERR_SERVICENAMEINUSE:
 		sprintf(mybuf, "*** Error: %s: Service %s is already in use.",
-			parv[0], parv[1]);
+			parv[0], parv[2]);
 		break;
 	    case ERR_SERVICECONFUSED:
 		sprintf(mybuf, "Error: %s: Your service name is confused",
@@ -148,8 +149,8 @@ char	*parv[];
 			"Magic locks open only with an invitation key");
 		break;
 	    case ERR_BANNEDFROMCHAN:
-		sprintf(mybuf,"*** Error: %s: You are banned from the channel",
-			parv[0]);
+		sprintf(mybuf,"*** Error: %s: %s %s",
+			parv[0], "You are banned from the channel", parv[2]);
 		break;
 	    case ERR_NOTREGISTERED:
 		sprintf(mybuf, "*** Error: %s: %s", parv[0],
@@ -157,8 +158,8 @@ char	*parv[];
 			"You have not registered yourself yet");
 		break;
 	    case ERR_NEEDMOREPARAMS:
-		sprintf(mybuf, "*** Error: %s: %s", parv[0],
-			(parv[2][0]) ? parv[2] : "Not enough parameters");
+		sprintf(mybuf, "*** Error: %s: %s: %s", parv[0], parv[2],
+			(parv[3][0]) ? parv[3] : "Not enough parameters");
 		break;
 	    case ERR_ALREADYREGISTRED:
 		sprintf(mybuf, "*** Error: %s: %s", parv[0],
@@ -284,7 +285,7 @@ char	*parv[];
 	    case RPL_INFO:
 		sprintf(mybuf, "*** %s: Info: %s", parv[0], parv[2]);
 		break;
-#if 0
+#if 1
 	    case RPL_MOTD:
 		sprintf(mybuf, "*** %s: Motd: %s", parv[0], parv[2]);
 		break;
@@ -335,9 +336,10 @@ char	*parv[];
 			sprintf(mybuf,"*** %s Class: %s %s: %s",
 				parv[0], parv[3], parv[2], parv[4]);
 		else
-			sprintf(mybuf,"*** %s %s Class: %s %s (%s %s)",
+			sprintf(mybuf,"*** %s %s Class: %s %s (%s %s) %s",
 				parv[0], parv[2], parv[3], parv[6],
-				parv[4], parv[5]);
+				parv[4], parv[5],
+				BadPtr(parv[7]) ? "" : parv[7]);
 		break;
 	    case RPL_TRACECONNECTING:
 	    case RPL_TRACEHANDSHAKE:
@@ -377,14 +379,17 @@ char	*parv[];
 		break;
 	    case RPL_STATSKLINE:
 	    case RPL_STATSQLINE:
-	    case RPL_STATSYLINE:
 		sprintf(mybuf, "*** %s: %s:%s:%s:%s:%s:%s",
-			parv[0], parv[3], parv[4], parv[5],
-			parv[6], parv[7], parv[8]);
+			parv[0], parv[2], parv[3], parv[4],
+			parv[5], parv[6], parv[7]);
+		break;
+	    case RPL_STATSYLINE:
+		sprintf(mybuf, "*** %s: Cl:%s Pf:%s Cf:%s Max:%s Sq:%s",
+			parv[0], parv[3], parv[4],
+			parv[5], parv[6], parv[7]);
 		break;
 	    case RPL_UMODEIS:
 		sprintf(mybuf, "*** %s: Mode for user %s is %s",
-			/* parv[0], parv[2], parv[3]);	-Vesa */
 			parv[0], parv[1], parv[2]);
 		break;
 	    case RPL_SERVICEINFO:

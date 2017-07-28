@@ -18,7 +18,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)s_auth.c	1.15 4/3/93 (C) 1992 Darren Reed";
+static  char sccsid[] = "%W% %G% (C) 1992-1995 Darren Reed";
 #endif
 
 #include "struct.h"
@@ -26,7 +26,6 @@ static  char sccsid[] = "@(#)s_auth.c	1.15 4/3/93 (C) 1992 Darren Reed";
 #include "sys.h"
 #include "res.h"
 #include "numeric.h"
-#include "patchlevel.h"
 #include <sys/socket.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
@@ -51,9 +50,10 @@ static  char sccsid[] = "@(#)s_auth.c	1.15 4/3/93 (C) 1992 Darren Reed";
  * of "unknown".
  */
 void	start_auth(cptr)
-Reg1	aClient	*cptr;
+Reg	aClient	*cptr;
 {
-	struct	sockaddr_in	sock;
+	struct	sockaddr_in	us, them;
+	int     ulen, tlen;
 
 	Debug((DEBUG_NOTICE,"start_auth(%x) fd %d status %d",
 		cptr, cptr->fd, cptr->status));
@@ -63,36 +63,71 @@ Reg1	aClient	*cptr;
 		syslog(LOG_ERR, "Unable to create auth socket for %s:%m",
 			get_client_name(cptr,TRUE));
 #endif
+		Debug((DEBUG_ERROR, "Unable to create auth socket for %s:%s",
+			get_client_name(cptr, TRUE),
+			strerror(get_sockerr(cptr))));
 		if (!DoingDNS(cptr))
 			SetAccess(cptr);
 		ircstp->is_abad++;
+		return;
+	    }
+	if (cptr->authfd >= (MAXCONNECTIONS - 2))
+	    {
+		sendto_flag(SCH_ERROR, "Can't allocate fd for auth on %s",
+			   get_client_name(cptr, TRUE));
+		(void)close(cptr->authfd);
 		return;
 	    }
 
 	set_non_blocking(cptr->authfd, cptr);
 
-	bcopy((char *)&cptr->ip, (char *)&sock.sin_addr,
-		sizeof(struct in_addr));
+	/* get remote host peer - so that we get right interface -- jrg */
+	tlen = ulen = sizeof(us);
+	(void)getpeername(cptr->fd, (struct sockaddr *)&them, &tlen);
 
-	sock.sin_port = htons(113);
-	sock.sin_family = AF_INET;
+	them.sin_port = htons(113);
+	them.sin_family = AF_INET;
 
-	(void)alarm((unsigned)4);
-	if (connect(cptr->authfd, (struct sockaddr *)&sock,
-		    sizeof(sock)) == -1 && errno != EINPROGRESS)
+	/* We must bind the local end to the interface that they connected
+	   to: The local system might have more than one network address,
+	   and RFC931 check only sends port numbers: server takes IP addresses
+	   from query socket -- jrg */
+	(void)getsockname(cptr->fd, (struct sockaddr *)&us, &ulen);
+	us.sin_port = htons(0);  /* bind assigns us a port */
+	us.sin_family = AF_INET;
+	Debug((DEBUG_NOTICE,"auth(%x) from %s",
+	       cptr, inetntoa((char *)&us.sin_addr)));
+	if (bind(cptr->authfd, (struct sockaddr *)&us, ulen) >= 0)
 	    {
-		ircstp->is_abad++;
-		/*
-		 * No error report from this...
-		 */
+		(void)getsockname(cptr->fd, (struct sockaddr *)&us, &ulen);
+		Debug((DEBUG_NOTICE,"auth(%x) to %s",
+			cptr, inetntoa((char *)&them.sin_addr)));
+		(void)alarm((unsigned)4);
+		if (connect(cptr->authfd, (struct sockaddr *)&them,
+			    tlen) == -1 && errno != EINPROGRESS)
+		    {
+			Debug((DEBUG_ERROR,
+				"auth(%x) connect failed to %s - %d", cptr,
+				inetntoa((char *)&them.sin_addr), errno));
+			ircstp->is_abad++;
+			/*
+			 * No error report from this...
+			 */
+			(void)alarm((unsigned)0);
+			(void)close(cptr->authfd);
+			cptr->authfd = -1;
+			if (!DoingDNS(cptr))
+				SetAccess(cptr);
+			return;
+		    }
 		(void)alarm((unsigned)0);
-		(void)close(cptr->authfd);
-		cptr->authfd = -1;
-		if (!DoingDNS(cptr))
-			SetAccess(cptr);
-		return;
 	    }
-	(void)alarm((unsigned)0);
+	else
+		Debug((DEBUG_ERROR,"auth(%x) bind failed on %s port %d - %d",
+		      cptr, inetntoa((char *)&us.sin_addr),
+		      ntohs(us.sin_port), errno));
+
+
 	cptr->flags |= (FLAGS_WRAUTH|FLAGS_AUTH);
 	if (cptr->authfd > highest_fd)
 		highest_fd = cptr->authfd;
@@ -128,7 +163,7 @@ aClient	*cptr;
 		goto authsenderr;
 	    }
 
-	(void)sprintf(authbuf, "%u , %u\r\n",
+	(void)irc_sprintf(authbuf, "%u , %u\r\n",
 		(unsigned int)ntohs(them.sin_port),
 		(unsigned int)ntohs(us.sin_port));
 
@@ -139,6 +174,9 @@ aClient	*cptr;
 authsenderr:
 		ircstp->is_abad++;
 		(void)close(cptr->authfd);
+		if (cptr->authfd == highest_fd)
+			while (!local[highest_fd])
+				highest_fd--;
 		cptr->authfd = -1;
 		cptr->flags &= ~(FLAGS_AUTH|FLAGS_WRAUTH);
 		if (!DoingDNS(cptr))
@@ -146,7 +184,6 @@ authsenderr:
 		return;
 	    }
 	cptr->flags &= ~FLAGS_WRAUTH;
-
 	return;
 }
 
@@ -158,14 +195,14 @@ authsenderr:
  * if it is fragmented by IP.
  */
 void	read_authports(cptr)
-Reg1	aClient	*cptr;
+Reg	aClient	*cptr;
 {
-	Reg1	char	*s, *t;
-	Reg2	int	len;
-	char	ruser[USERLEN+1], tuser[USERLEN+1];
-	u_short	remote = 0, local = 0;
+	Reg	char	*s, *t;
+	Reg	int	len;
+	char	ruser[USERLEN+1], system[8];
+	u_short	remp = 0, locp = 0;
 
-	*ruser = '\0';
+	*system = *ruser = '\0';
 	Debug((DEBUG_NOTICE,"read_authports(%x) fd %d authfd %d stat %d",
 		cptr, cptr->fd, cptr->authfd, cptr->status));
 	/*
@@ -182,24 +219,34 @@ Reg1	aClient	*cptr;
 		cptr->buffer[cptr->count] = '\0';
 	    }
 
-	if ((len > 0) && (cptr->count != sizeof(cptr->buffer) - 1) &&
+	if ((len > 0) && (cptr->count != (sizeof(cptr->buffer) - 1)) &&
 	    (sscanf(cptr->buffer, "%hd , %hd : USERID : %*[^:]: %10s",
-		    &remote, &local, tuser) == 3) &&
-	    (s = rindex(cptr->buffer, ':')))
+		    &remp, &locp, ruser) == 3))
 	    {
-		for (++s, t = ruser; *s && (t < ruser + sizeof(ruser)); s++)
-			if (!isspace(*s) && *s != ':')
+		s = rindex(cptr->buffer, ':');
+		*s++ = '\0';
+		for (t = (rindex(cptr->buffer, ':') + 1); *t; t++)
+			if (!isspace(*t))
+				break;
+		strncpyzt(system, t, sizeof(system));
+		for (t = ruser; *s && (t < ruser + sizeof(ruser)); s++)
+			if (!isspace(*s) && *s != ':' && *s != '@')
 				*t++ = *s;
 		*t = '\0';
-		Debug((DEBUG_INFO,"auth reply ok"));
+		Debug((DEBUG_INFO,"auth reply ok [%s] [%s]", system, ruser));
 	    }
 	else if (len != 0)
 	    {
-		Debug((DEBUG_ERROR,"local %d remote %d s %x",local,remote,s));
+		if (!index(cptr->buffer, '\n') && !index(cptr->buffer, '\r'))
+			return;
+		Debug((DEBUG_ERROR,"local %d remote %d s %x", locp, remp, s));
 		Debug((DEBUG_ERROR,"bad auth reply in [%s]", cptr->buffer));
 		*ruser = '\0';
 	    }
 	(void)close(cptr->authfd);
+	if (cptr->authfd == highest_fd)
+		while (!local[highest_fd])
+			highest_fd--;
 	cptr->count = 0;
 	cptr->authfd = -1;
 	ClearAuth(cptr);
@@ -208,15 +255,21 @@ Reg1	aClient	*cptr;
 	if (len > 0)
 		Debug((DEBUG_INFO,"ident reply: [%s]", cptr->buffer));
 
-	if (!local || !remote || !*ruser)
+	if (!locp || !remp || !*ruser)
 	    {
 		ircstp->is_abad++;
-		(void)strcpy(cptr->username, "unknown");
 		return;
 	    }
 	ircstp->is_asuc++;
-	strncpyzt(cptr->username, ruser, USERLEN+1);
-	cptr->flags |= FLAGS_GOTID;
+  	if (strncmp(system, "OTHER", 5))
+ 		strncpy(cptr->username, ruser, USERLEN+1);
+ 	else
+	    { /* OTHER type of identifier */
+ 		*cptr->username = '-';	/* -> add '-' prefix into ident */
+ 		strncpy(&cptr->username[1], ruser, USERLEN);
+	    }
+ 	cptr->username[USERLEN] = '\0';
+ 	cptr->flags |= FLAGS_GOTID;
 	Debug((DEBUG_INFO, "got username [%s]", ruser));
 	return;
 }

@@ -20,12 +20,14 @@
 #ifndef	__common_include__
 #define __common_include__
 
-#ifndef PROTO
-#if __STDC__
-#	define PROTO(x)	x
+#ifdef HAVE_SYS_CDEFS_H
+#include <sys/cdefs.h>
 #else
-#	define PROTO(x)	()
+#include "cdefs.h"
 #endif
+
+#ifdef	HAVE_SYS_PARAM_H
+#include <sys/param.h>
 #endif
 
 #ifndef NULL
@@ -43,63 +45,50 @@
 #define FALSE (0)
 #define TRUE  (!FALSE)
 
-#if defined(mips) || defined(pyr) || defined(apollo) || (defined(sequent) &&\
-    !defined(DYNIXPTX)) || defined(__convex__) ||\
-    (defined(BSD) && !defined(sun) && !defined(ultrix))
+#if 0
+#ifndef	HAVE_SYS_MALLOC_H
 char	*malloc(), *calloc();
-void	free();
 #else
-#include <malloc.h>
+/*#include MALLOCH*/
+#endif
 #endif
 
-extern	int	matches PROTO((char *, char *));
-#ifdef	NEED_STRCASECMP
-extern	int	mycmp PROTO((char *, char *));
-#else
-#define	mycmp	strcasecmp
-#define	myncmp	strncasecmp
-#endif
+extern	char	*collapse __P((char *));
+extern	int	matches __P((char *, char *));
+extern	int	mycmp __P((char *, char *));
+extern	int	myncmp __P((char *, char *, int));
 #ifdef NEED_STRTOK
-extern	char	*strtok PROTO((char *, char *));
+extern	char	*strtok __P((char *, char *));
 #endif
 #ifdef NEED_STRTOKEN
-extern	char	*strtoken PROTO((char **, char *, char *));
+extern	char	*strtoken __P((char **, char *, char *));
 #endif
 #ifdef NEED_INET_ADDR
-extern unsigned long inet_addr PROTO((char *));
+extern unsigned long inet_addr __P((char *));
 #endif
 
 #if defined(NEED_INET_NTOA) || defined(NEED_INET_NETOF)
 #include <netinet/in.h>
 #endif
 
-#ifdef NEED_INET_NTOA
-extern char *inet_ntoa PROTO((struct in_addr));
+extern char *myctime __P((time_t));
+extern char *strtoken __P((char **, char *, char *));
+
+#ifndef MAX
+#define MAX(a, b)	((a) > (b) ? (a) : (b))
+#endif
+#ifndef MIN
+#define MIN(a, b)	((a) < (b) ? (a) : (b))
 #endif
 
-#ifdef NEED_INET_NETOF
-extern int inet_netof PROTO((struct in_addr));
+#ifdef	SPRINTF
+#undef	SPRINTF
 #endif
+#define	SPRINTF	(void) irc_sprintf
 
-extern char *myctime PROTO((time_t));
-extern char *strtoken PROTO((char **, char *, char *));
-
-#if defined(ULTRIX) || defined(SGI) || defined(sequent) || defined(HPUX) || \
-    defined(OSF)
-#include <sys/param.h>
-#else
-# ifndef MAX
-#  define MAX(a, b)	((a) > (b) ? (a) : (b))
-# endif
-# ifndef MIN
-#  define MIN(a, b)	((a) < (b) ? (a) : (b))
-# endif
-#endif
-
-#define MyFree(x)       if ((x) != NULL) free(x)
-#define DupString(x,y) do{x=MyMalloc(strlen(y)+1);(void)strcpy(x,y);}while(0)
-
-#ifdef USE_OUR_CTYPE
+#define DupString(x,y) do {x = (char *)MyMalloc(strlen((char *)y) + 1);\
+			   (void)strcpy((char *)x, (char *)y);\
+			  } while(0)
 
 extern unsigned char tolowertab[];
 
@@ -113,6 +102,7 @@ extern unsigned char touppertab[];
 
 #undef isalpha
 #undef isdigit
+#undef isxdigit
 #undef isalnum
 #undef isprint
 #undef isascii
@@ -133,17 +123,21 @@ extern unsigned char char_atribs[];
 
 #define isalpha(c) (char_atribs[(u_char)(c)]&ALPHA)
 #define isspace(c) (char_atribs[(u_char)(c)]&SPACE)
-#define islower(c) ((char_atribs[(u_char)(c)]&ALPHA) && ((u_char)(c) > 0x5f))
-#define isupper(c) ((char_atribs[(u_char)(c)]&ALPHA) && ((u_char)(c) < 0x60))
+#define islower(c) ((char_atribs[(u_char)(c)]&ALPHA) && \
+		    ((u_char)(c) > (u_char)0x5f))
+#define isupper(c) ((char_atribs[(u_char)(c)]&ALPHA) && \
+		    ((u_char)(c) < (u_char)0x60))
 #define isdigit(c) (char_atribs[(u_char)(c)]&DIGIT)
+#define	isxdigit(c) (isdigit(c) || \
+		     (u_char)'a' <= (c) && (c) <= (u_char)'f' || \
+		     (u_char)'A' <= (c) && (c) <= (u_char)'F')
 #define isalnum(c) (char_atribs[(u_char)(c)]&(DIGIT|ALPHA))
 #define isprint(c) (char_atribs[(u_char)(c)]&PRINT)
-#define isascii(c) ((u_char)(c) >= 0 && (u_char)(c) <= 0x7f)
-#define isgraph(c) ((char_atribs[(u_char)(c)]&PRINT) && ((u_char)(c) != 0x32))
+#define isascii(c) (((u_char)(c) >= (u_char)'\0') && \
+		    ((u_char)(c) <= (u_char)0x7f))
+#define isgraph(c) ((char_atribs[(u_char)(c)]&PRINT) && \
+		    ((u_char)(c) != (u_char)0x32))
 #define ispunct(c) (!(char_atribs[(u_char)(c)]&(CNTRL|ALPHA|DIGIT)))
-#else
-#include <ctype.h>
-#endif
 
 extern char *MyMalloc();
 extern void flush_connections();

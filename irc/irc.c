@@ -34,7 +34,7 @@ char irc_id[]="irc.c v2.0 (c) 1988 University of Oulu, Computing\
  Center and Jarkko Oikarinen";
 
 #define DEPTH 10
-#define KILLMAX 10  /* Number of kills to accept to really die */
+#define KILLMAX 2  /* Number of kills to accept to really die */
                     /* this is to prevent looping with /unkill */
 
 #include "struct.h"
@@ -46,7 +46,9 @@ char irc_id[]="irc.c v2.0 (c) 1988 University of Oulu, Computing\
 #include "common.h"
 #include "msg.h"
 #include "sys.h"
+#define IRCCMDS
 #include "irc.h"
+#undef IRCCMDS
 #include "h.h"
 
 #include <pwd.h>
@@ -90,17 +92,20 @@ char	buf[BUFSIZE];
 int	portnum, termtype = CURSES_TERM;
 int	debuglevel = DEBUG_ERROR;
 int	unkill_flag = 0, cchannel = 0;
-int	intr() /* , timeout()	Used *nowhere*	Vesa */ ;
 int	QuitFlag = 0;
 
+void	intr();
 void	quit_intr();
+void	myloop();
+void	write_statusline();
 
 static	int	KillCount = 0;
 static	int	apu = 0;  /* Line number we're currently on screen */
 static	int	sock;     /* Server socket fd */
 static	char	currserver[HOSTLEN + 1];
+static	char	*querychannel;
 
-#ifdef HPUX
+#if defined(HPUX) || defined(SVR3) || defined(SVR4)
 char	logbuf[BUFSIZ]; 
 #endif
 
@@ -114,64 +119,89 @@ struct itmlst
 	       &persname, &perslength}};
 #endif
 
-main(argc, argv)
+int main(argc, argv)
 int	argc;
 char	*argv[];
 {
   static char usage[] =
-    "Usage: %s [ -c channel ] [ -p port ] [ nickname [ server ] ]\n";
-	int	channel = 0;
-	int	length;
+    "Usage: %s [-c channel] [-k passwd] [-p port] [-i] [-w] [-s] [nickname [server]]\n";
+	char	channel[CHANNELLEN+1];
+	int	length, mode = 0;
 	struct	passwd	*userdata;
 	char	*cp, *argv0=argv[0], *nickptr, *servptr, *getenv(), ch;
-	/* What is this for? 	-Vesa */
-#if 0	/* ??? !defined(VMS) && !defined(SOL20) && !defined(HPUX) */
-	extern int exit();
-#endif
 
 	if ((cp = rindex(argv0, '/')) != NULL)
 		argv0 = ++cp;
 	portnum = PORTNUM;
 	*buf = *currserver = '\0';
+	channel[0] = '\0';
 	me.user = &meUser;
 	me.from = &me;
-	/* Let's drop this.. ?	-Vesa
-	initconf(currserver, me.passwd, me.sockhost, &meUser.channel);
-	*/
 	setuid(getuid());
+	version = make_version();
 
 	while (argc > 1 && argv[1][0] == '-') {
 		switch(ch = argv[1][1])
 		{
+		case 'h':
+			printf(usage, argv0);
+			exit(1);
+			break;
 		case 'p':
-		case 'c':
 			length = 0;
 			if (argv[1][2] != '\0')
 				length = atoi(&argv[1][2]);
 			else if (argc > 2) {
-					length = atoi(argv[2]);
-					argv++;
-					argc--;
+				length = atoi(argv[2]);
+				argv++;
+				argc--;
 			}
-			if (ch == 'p') {
-				if (length <= 0) {
-					printf(usage, argv0);
-					exit(1);
-				}
-				cchannel = length;
-			} else {
-				if (length == 0) {
-					printf(usage, argv0);
-					exit(1);
-				} else
-					channel = length;
+			if (length <= 0) {
+				printf(usage, argv0);
+				exit(1);
+			}
+			cchannel = length;
+			break;
+		case 'c':
+			if (argv[1][2] != '\0')
+				strncpy(channel, &argv[1][2], CHANNELLEN);
+			else if (argc > 2) {
+				strncpy(channel, argv[2], CHANNELLEN);
+				argv++;
+				argc--;
+			}
+			if (!channel[0]) {
+				printf(usage, argv0);
+				exit(1);
 			}
 			break;
+		case 'i':
+			mode |= FLAGS_INVISIBLE;
+			break;
+		case 'w':
+			mode |= FLAGS_WALLOP;
+			break;
+		case 'k':
+                        if (argv[1][2] != '\0')
+                                strncpy(me.passwd, &argv[1][2], PASSWDLEN);
+                        else if (argc > 2) {
+                                strncpy(me.passwd, argv[2], PASSWDLEN);
+                                argv++;
+                                argc--;
+                        }
+                        if (!me.passwd[0]) {
+                                printf(usage, argv0);
+                                exit(1);
+                        }
+			break;
 #ifdef DOTERMCAP
-			case 's':
-				termtype = TERMCAP_TERM;
-				break;
+		case 's':
+			termtype = TERMCAP_TERM;
+			break;
 #endif
+		case 'v':
+			(void)printf("irc %s\n", version);
+			exit(0);
 		}
 		argv++;
 		argc--;
@@ -180,7 +210,7 @@ char	*argv[];
 	me.name[0] = me.buffer[0] = '\0';
 	me.next = NULL;
 	me.status = STAT_ME;
-	if (servptr = getenv("IRCSERVER"))
+	if ((servptr = getenv("IRCSERVER")))
 		strncpyzt(currserver, servptr, HOSTLEN);
 	if (argc > 2)
 		strncpyzt(currserver, argv[2], HOSTLEN);
@@ -216,7 +246,7 @@ char	*argv[];
 		if (!*me.name) {
 			if (argc >= 2) {
 				strncpy(me.name, argv[1], NICKLEN);
-			} else if (nickptr = getenv("IRCNICK")) {
+			} else if ((nickptr = getenv("IRCNICK"))) {
 				strncpy(me.name, nickptr, NICKLEN);
 			} else
 #ifdef AUTOMATON
@@ -233,9 +263,10 @@ char	*argv[];
 			strncpy(me.info, &argv0[1], REALLEN);
 			strncpy(meUser.username, argv[1], USERLEN);
 		} else {
-			if (cp = getenv("IRCNAME"))
+			sprintf(me.sockhost, "%d", mode);
+			if ((cp = getenv("IRCNAME")))
 				strncpy(me.info, cp, REALLEN);
-			else if (cp = getenv("NAME"))
+			else if ((cp = getenv("NAME")))
 				strncpy(me.info, cp, REALLEN);
 			else {
 #ifdef AUTOMATON
@@ -263,6 +294,7 @@ char	*argv[];
 		if (termtype == CURSES_TERM) {
 			initscr();
 			signal(SIGINT, quit_intr);
+			signal(SIGTSTP, suspend_irc);
 			noecho();
 			crmode();
 			clear();
@@ -279,13 +311,18 @@ char	*argv[];
 		if (me.passwd[0])
 			sendto_one(&me, "PASS %s", me.passwd);
 		sendto_one(&me, "NICK %s", me.name);
-		sendto_one(&me, "USER %s %s %s %s", meUser.username,
+		sendto_one(&me, "USER %s %s %s :%s", meUser.username,
 			   me.sockhost, meUser.server, me.info);
-		if (channel)
-			sendto_one(&me, "CHANNEL %d", channel);
+	        querychannel = (char *)malloc(strlen(me.name) + 1);
+		strcpy(querychannel, me.name);	/* Kludge? */
+		if (channel[0])
+			do_channel(channel, "JOIN");
 		myloop(sock);
 		if (logfile)
 			do_log(NULL);
+		printf("Press any key.");
+        	getchar();
+		printf("\n");
 #ifdef DOCURSES
 		if (termtype == CURSES_TERM) {
 			echo();
@@ -302,7 +339,7 @@ char	*argv[];
 	exit(0);
 }
 
-intr()
+void intr()
 {
 	if (logfile)
 		do_log(NULL);
@@ -321,7 +358,7 @@ intr()
 	exit(0);
 }
 
-myloop(sock)
+void myloop(sock)
 int	sock;
 {
 	write_statusline();
@@ -337,29 +374,27 @@ int	sock;
 static	char	cmdch = '/';
 static	char	queryuser[QUERYLEN+2] = "";
 
-int	do_cmdch(ptr, temp)
+void	do_cmdch(ptr, temp)
 char	*ptr, *temp;
 {
 	if (BadPtr(ptr)) {
 		putline("Error: Command character not changed");
-		return (-1);
+		return;
 	}
 	cmdch = *ptr;
-	return (0);
 }
 
-int	do_quote(ptr, temp)
+void	do_quote(ptr, temp)
 char	*ptr, *temp;
 {
 	if (BadPtr(ptr)) {
 		putline("*** Error: Empty command");
-		return (-1);
+		return;
 	}
 	sendto_one(&me,"%s", ptr);
-	return (0);
 }
 
-int	do_query(ptr, temp)
+void	do_query(ptr, temp)
 char	*ptr, *temp;
 {
 	if (BadPtr(ptr)) {
@@ -372,17 +407,16 @@ char	*ptr, *temp;
 			queryuser);
 		putline(buf);
 	}
-	return (0);
 }
 
-int	do_mypriv(buf1, buf2)
+void	do_mypriv(buf1, buf2)
 char	*buf1, *buf2;
 {
 	char	*tmp = index(buf1, ' ');
 
 	if (tmp == NULL) {
 		putline("*** Error: Empty message not sent");
-		return (-1);
+		return;
 	}
 	if (buf1[0] == ',' && buf1[1] == ' ') {
 		sendto_one(&me, "PRIVMSG %s :%s", last_to_me(NULL), &buf1[2]);
@@ -405,35 +439,30 @@ char	*buf1, *buf2;
 			sprintf(buf,"->%s> %s", buf1, tmp);
 		putline(buf);
 	}
-	return (0);
 }
 
-int	do_myqpriv(buf1, buf2)
+void	do_myqpriv(buf1, buf2)
 char	*buf1, *buf2;
 {
 	if (BadPtr(buf1)) {
 		putline("*** Error: Empty message not sent");
-		return (-1);
+		return;
 	}
 	sendto_one(&me, "PRIVMSG %s :%s", queryuser, buf1);
 
 	sprintf(buf,"-> *%s* %s", queryuser, buf1);
 	putline(buf);
-	return (0);
 }
 
-static	char	*querychannel = "0";
-
-int	do_mytext(buf1, temp)
+void	do_mytext(buf1, temp)
 char	*buf1, *temp;
 {
 	sendto_one(&me, "PRIVMSG %s :%s", querychannel, buf1);
 	sprintf(buf,"%s> %s", querychannel, buf1);
 	putline(buf);
-	return (0);
 }
 
-int	do_unkill(buf, temp)
+void	do_unkill(buf, temp)
 char	*buf, *temp;
 {
 	if (unkill_flag)
@@ -444,10 +473,9 @@ char	*buf, *temp;
 	sprintf(buf, "*** Unkill feature turned %s",
 		(unkill_flag) ? "on" : "off");
 	putline(buf);
-	return (0);
 }
 
-int	do_bye(buf, tmp)
+void	do_bye(buf, tmp)
 char	*buf, *tmp;
 {
 	unkill_flag = 0;
@@ -466,40 +494,55 @@ char	*buf, *tmp;
 #endif
 	exit(0);
 #endif
-	return (0);
 }
 
-do_kill(buf1, tmp)	/* 9.1.1993	-Vesa */
+/* KILL, PART, SQUIT, TOPIC	"CMD PARA1 [:PARA2]" */
+void do_kill(buf1, tmp)
 char    *buf1, *tmp;
 {
 	char *b2;
 
 	b2 = index(buf1, SPACE);		/* find end of servername */
-	if (b2)					/* comment required */
+	if (b2)					/* comment */
 	    {
-		sprintf(buf, "%%s %%.%ds :%%s", b2 - buf1);
-        	sendto_one(&me, buf, tmp, buf1, b2 + 1);
+		*b2 = 0;
+        	sendto_one(&me, "%s %s :%s", tmp, buf1, b2 + 1);
 	    }
+	else
+       		sendto_one(&me, "%s %s", tmp, buf1);
+	if (*tmp == 'P') {			/* PART */
+		free(querychannel);
+	        querychannel = (char *)malloc(strlen(me.name) + 1);
+		strcpy(querychannel, me.name);	/* Kludge? */
+	}
 }
 
-do_kick(buf1, tmp)	/* 23.1.1993	-Vesa */
+/* "CMD PARA1 PARA2 [:PARA3]" */
+void do_kick(buf1, tmp)
 char    *buf1, *tmp;
 {
 	char *b2, *b3;
 
 	b2 = index(buf1, SPACE);		/* find end of channel name */
-	if (!b2) return;
-	b3 = index(b2 + 1, SPACE);		/* find end of victim name */
+	if (b2)
+	    b3 = index(b2 + 1, SPACE);		/* find end of victim name */
 	if (b3)
 	    {
-		sprintf(buf, "%%s %%.%ds :%%s", b3 - buf1);
-       		sendto_one(&me, buf, tmp, buf1, b3 + 1);
+		*b3 = 0;
+       		sendto_one(&me, "%s %s :%s", tmp, buf1, b3 + 1);
 	    }
 	else
-       		sendto_one(&me, "%s %s", tmp, buf1);
+       		sendto_one(&me, "%s %s :No comment", tmp, buf1);
 }
 
-int	do_server(buf, tmp)
+/* "CMD :PARA1" */
+void do_away(buf1, tmp)
+char    *buf1, *tmp;
+{
+	sendto_one(&me, "%s :%s", tmp, buf1);
+}
+
+void do_server(buf, tmp)
 char	*buf, *tmp;
 {
 	strncpyzt(currserver, buf, HOSTLEN);
@@ -507,11 +550,9 @@ char	*buf, *tmp;
 	sendto_one(&me,"QUIT");
 	close(sock);
 	QuitFlag = 1;
-	return (-1);
 }
 
-sendit(sock,line)
-int	sock;
+void sendit(line)
 char	*line;
 {
 	char	*ptr = NULL;
@@ -529,7 +570,7 @@ char	*line;
 		do_mytext(&line[2], NULL);
 	else if (line[1]) {
 		for ( ; cmd->name; cmd++)
-			if (ptr = mycncmp(&line[1], cmd->name))
+			if ((ptr = mycncmp(&line[1], cmd->name)))
 				break;
 		if (!cmd->name)
 			putline("*** Error: Unknown command");
@@ -558,7 +599,8 @@ char	*str1, *str2;
 	char	*s1;
 
 	for (s1 = str1; *s1 != ' ' && *s1 && *str2; s1++, str2++) {
-		if (!isascii(*s1))
+		/* if (!isascii(*s1)) */
+		if (*s1 & 0x80)
 			return 0;
 		*s1 = toupper(*s1);
 		if (*s1 != *str2)
@@ -574,7 +616,7 @@ char	*str1, *str2;
 		return s1;
 }
 
-do_clear(buf, temp)
+void do_clear(buf, temp)
 char	*buf, *temp;
 {
 #ifdef DOCURSES
@@ -596,7 +638,7 @@ char	*buf, *temp;
 #endif
 }
 
-putline(line)
+void putline(line)
 char *line;
 
 {
@@ -715,14 +757,7 @@ int	unixuser()
 #endif
 }
 
-#if 0
-aClient	*make_client()
-{
-	return(NULL);
-}
-#endif /* 0	Useless?	-Vesa */
-
-do_log(ptr, temp)
+void do_log(ptr, temp)
 char	*ptr, *temp;
 {
 	long	tloc;
@@ -736,7 +771,7 @@ char	*ptr, *temp;
 #endif
 
 	if (!unixuser())
-		return /* -1 */ ;
+		return;
 	if (!logfile) {		          /* logging currently off */
 		if (BadPtr(ptr))
 			putline("*** You must specify a filename to log to.");
@@ -748,10 +783,10 @@ char	*ptr, *temp;
 				putline(buf);
 			} else {
 #ifndef VMS
-# ifdef HPUX
+# if defined(HPUX) || defined(SVR3) || defined(SVR4)
 				setvbuf(logfile,logbuf,_IOLBF,sizeof(logbuf));
 # else
-#  ifndef SOL20
+#  if !defined(_SEQUENT_) && !defined(SVR4)
 				setlinebuf(logfile);
 #  endif
 # endif
@@ -828,7 +863,7 @@ char	*ptr, *xtra;
 
 /* Fake routine (it's only in server...) */
 
-do_channel(ptr, xtra)
+void do_channel(ptr, xtra)
 char *ptr, *xtra;
 {
 	char *p1;
@@ -838,27 +873,26 @@ char *ptr, *xtra;
 		return;
 	}
 
-	if (querychannel)
-		free((char *)querychannel);
+	free((char *)querychannel);
 
-	if (querychannel = (char *)malloc(strlen(ptr) + 1))
+	if ((querychannel = (char *)malloc(strlen(ptr) + 1)))
 	    {
 		/* Copy only channel name from *ptr	-Vesa */
 		strcpy(buf, ptr);
-		if (p1 = index(buf, ' '))
+		if ((p1 = index(buf, ' ')))
 			*p1 = '\0';
-		if (p1 = rindex(buf, ','))	/* The last channel */
+		if ((p1 = rindex(buf, ',')))	/* The last channel */
 			strcpy(querychannel, p1 + 1);
 		else				/* The only channel */
 			strcpy(querychannel, buf);
 	    }
 	else
-		querychannel = me.name; /* kludge */
+		printf("Blah! Out of memory?\n");
 
 	sendto_one(&me, "%s %s", xtra, ptr);
 }
 
-write_statusline()
+void write_statusline()
 {
 #ifdef DOCURSES
 	char	header[HEADERLEN];

@@ -20,7 +20,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)s_numeric.c	2.11 12/20/92 (C) 1988 University of Oulu, \
+static  char sccsid[] = "@(#)s_numeric.c	1.1 1/21/95 (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 
@@ -59,7 +59,7 @@ char	*parv[];
 	int	i;
 
 	if (parc < 1 || !IsServer(sptr))
-		return 0;
+		return 1;
 	/* Remap low number numerics. */
 	if (numeric < 100)
 		numeric += 100;
@@ -81,9 +81,9 @@ char	*parv[];
 		(void)strcat(buffer, " :");
 		(void)strcat(buffer, parv[parc-1]);
 	    }
-	for (; nick = strtoken(&p, parv[1], ","); parv[1] = NULL)
+	for (; (nick = strtoken(&p, parv[1], ",")); parv[1] = NULL)
 	    {
-		if (acptr = find_client(nick, (aClient *)NULL))
+		if ((acptr = find_client(nick, (aClient *)NULL)))
 		    {
 			/*
 			** Drop to bit bucket if for me...
@@ -92,17 +92,41 @@ char	*parv[];
 			** And so it was done. -avalon
 			** And regretted. Dont do it that way. Make sure
 			** it goes only to non-servers. -avalon
+			** Check added to make sure servers don't try to loop
+			** with numerics which can happen with nick collisions.
+			** - Avalon
 			*/
-		    if (!IsMe(acptr) && !IsServer(acptr))
-			sendto_prefix_one(acptr, sptr,":%s %d %s%s", parv[0],
-					  numeric, nick, buffer);
+			if (IsMe(acptr))
+				sendto_flag(SCH_NUM, "From %s: %s %d %s %s.",
+					    cptr->name, sptr->name,
+					    numeric, nick, buffer);
+			else if (IsPerson(acptr) && acptr->from != cptr)
+				sendto_prefix_one(acptr, sptr,":%s %d %s%s",
+					parv[0], numeric, nick, buffer);
+			else if (IsServer(acptr) && acptr->from != cptr)
+				sendto_prefix_one(acptr, sptr,":%s %d %s%s",
+					parv[0], numeric, nick, buffer);
+			else if (acptr->from == cptr)
+				sendto_flag(SCH_NOTICE,
+					  "Dropping numeric %d from %s for %s",
+					    numeric,
+					    get_client_name(cptr, TRUE),
+					    acptr->name);
 		    }
-		else if (chptr = find_channel(nick, (aChannel *)NULL))
+		/* any reason why no cptr == acptr->from checks here? -krys */
+		else if ((acptr = find_nickserv(nick, (aClient *)NULL)))
+			sendto_prefix_one(acptr, sptr,":%s %d %s%s",
+				parv[0], numeric, nick, buffer);
+		else if ((acptr = find_server(nick, (aClient *)NULL)))
+		    {
+			if (!IsMe(acptr) && acptr->from != cptr)
+				sendto_prefix_one(acptr, sptr,":%s %d %s%s",
+					parv[0], numeric, nick, buffer);
+		    }
+		else if ((chptr = find_channel(nick, (aChannel *)NULL)))
 			sendto_channel_butone(cptr,sptr,chptr,":%s %d %s%s",
 					      parv[0],
 					      numeric, chptr->chname, buffer);
 	    }
-	return 0;
+	return 1;
 }
-
-

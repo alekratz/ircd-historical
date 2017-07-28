@@ -23,7 +23,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)parse.c	2.23 5/3/93 (C) 1988 University of Oulu, \
+static  char sccsid[] = "%W% %G% (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 #include "struct.h"
@@ -36,67 +36,18 @@ Computing Center and Jarkko Oikarinen";
 #include "h.h"
 
 /*
- * NOTE: parse() should not be called recusively by other fucntions!
+ * NOTE: parse() should not be called recursively by other functions!
  */
 static	char	*para[MAXPARA+1];
-#ifndef	CLIENT_COMPILE
-static	int	cancel_clients PROTO((aClient *, aClient *));
-static	void	remove_unknown PROTO((aClient *, char *));
-#endif
 
 #ifdef	CLIENT_COMPILE
 static	char	sender[NICKLEN+USERLEN+HOSTLEN+3];
 char	userhost[USERLEN+HOSTLEN+2];
+#define	timeofday	time(NULL)
 #else
 static	char	sender[HOSTLEN+1];
-#endif
-
-#ifdef	NEED_STRCASECMP
-int	myncmp(str1, str2, n)
-Reg1	unsigned char	*str1;
-Reg2	unsigned char	*str2;
-int	n;
-    {
-#ifdef USE_OUR_CTYPE
-	while (toupper(*str1) == toupper(*str2))
-#else
-	while ( (islower(*str1) ? *str1 : tolower(*str1)) ==
-		(islower(*str2) ? *str2 : tolower(*str2)))
-#endif
-	    {
-		str1++; str2++; n--;
-		if (n == 0 || (*str1 == '\0' && *str2 == '\0'))
-			return(0);
-	    }
-	return(1);
-    }
-
-/*
-**  Case insensitive comparison of two NULL terminated strings.
-**
-**	return	0, if equal
-**		1, if not equal
-*/
-int	mycmp(s1, s2)
-char	*s1;
-char	*s2;
-    {
-	Reg1 unsigned char *str1 = (unsigned char *)s1;
-	Reg2 unsigned char *str2 = (unsigned char *)s2;
-#ifdef USE_OUR_CTYPE
-	while (toupper(*str2) == toupper(*str1))
-#else
-	while ( (islower(*str1) ? *str1 : tolower(*str1)) ==
-		(islower(*str2) ? *str2 : tolower(*str2)))
-#endif
-	    {
-		if (*str1 == '\0')
-			return(0);
-		str1++;
-		str2++;
-	    }
-	return 1;
-    }
+static	int	cancel_clients __P((aClient *, aClient *, char *));
+static	void	remove_unknown __P((aClient *, char *));
 #endif
 
 /*
@@ -110,7 +61,7 @@ char	*s2;
 #ifndef CLIENT_COMPILE
 aClient *find_client(name, cptr)
 char	*name;
-Reg1	aClient *cptr;
+Reg	aClient *cptr;
     {
 	if (name)
 		cptr = hash_find_client(name, cptr);
@@ -118,12 +69,25 @@ Reg1	aClient *cptr;
 	return cptr;
     }
 
+aClient *find_service(name, cptr)
+char	*name;
+Reg	aClient *cptr;
+    {
+	Reg	aClient	*acptr;
+
+	if (name)
+		acptr = hash_find_client(name, cptr);
+	if (acptr != cptr && acptr && !IsService(acptr))
+		acptr = cptr;
+	return cptr;
+    }
+
 aClient	*find_nickserv(name, cptr)
 char	*name;
-Reg1	aClient *cptr;
+Reg	aClient *cptr;
     {
 	if (name)
-		cptr = hash_find_nickserver(name, cptr);
+		cptr = hash_find_nickserv(name, cptr);
 
 	return cptr;
     }
@@ -133,7 +97,7 @@ aClient *find_client(name, cptr)
 char *name;
 aClient *cptr;
     {
-	Reg1 aClient *c2ptr = cptr;
+	Reg	aClient	*c2ptr = cptr;
 
 	if (!name)
 		return c2ptr;
@@ -158,8 +122,8 @@ char	*user, *host;
 aClient *cptr;
 int	*count;
     {
-	Reg1	aClient	*c2ptr;
-	Reg2	aClient	*res = cptr;
+	Reg	aClient	*c2ptr;
+	Reg	aClient	*res = cptr;
 
 	*count = 0;
 	if (user)
@@ -191,46 +155,98 @@ int	*count;
 **	string.
 */
 #ifndef CLIENT_COMPILE
+/*
+** Find a server from hash table, given its name
+*/
 aClient *find_server(name, cptr)
 char	*name;
-Reg1	aClient *cptr;
+Reg	aClient *cptr;
 {
 	if (name)
 		cptr = hash_find_server(name, cptr);
 	return cptr;
 }
 
+/*
+** Given a server name, find the server mask behind which the server
+** is hidden.
+*/
+aClient *find_mask(name, cptr)
+char	*name;
+aClient *cptr;
+{
+	static	char	servermask[HOSTLEN+1];
+	Reg	aClient	*c2ptr = cptr;
+	Reg	char	*mask = servermask;
+
+	if (!name)
+		return c2ptr;
+	if ((c2ptr = hash_find_server(name, cptr)))
+		return (c2ptr);
+	if (index(name, '*'))
+		return c2ptr;
+	strcpy (servermask, name);
+	while (*mask)
+	{
+		if (*(mask+1) == '.')
+		{
+			*mask = '*';
+			if ((c2ptr = hash_find_server(mask, cptr)))
+				return (c2ptr);
+		}
+		mask++;
+	}
+	return (c2ptr ? c2ptr : cptr);
+}
+
+/*
+** Find a server from hash table, given its token
+*/
+aServer	*find_tokserver(token, cptr, c2ptr)
+int	token;
+aClient	*cptr, *c2ptr;
+{
+	return hash_find_stoken(token, cptr, c2ptr);
+}
+
+/*
+** Find a server, given its name (which might contain *'s, in which case
+** the first match will be return [not the best one])
+*/
 aClient *find_name(name, cptr)
 char	*name;
 aClient *cptr;
 {
-	Reg1 aClient *c2ptr = cptr;
+	Reg	aClient	*c2ptr = cptr;
+	Reg	aServer	*sp = NULL;
 
 	if (!name)
 		return c2ptr;
 
-	if (c2ptr = hash_find_server(name, cptr))
+	if ((c2ptr = hash_find_server(name, cptr)))
 		return (c2ptr);
 	if (!index(name, '*'))
 		return c2ptr;
-	for (c2ptr = client; c2ptr; c2ptr = c2ptr->next)
+	for (sp = svrtop; sp; sp = sp->nexts)
 	    {
-		if (!IsServer(c2ptr) && !IsMe(c2ptr))
-			continue;
-		if (matches(name, c2ptr->name) == 0)
+		/*
+		** A server present in the list necessarily has a non NULL
+		** bcptr pointer.
+		*/
+		if (matches(name, sp->bcptr->name) == 0)
 			break;
-		if (index(c2ptr->name, '*'))
-			if (matches(c2ptr->name, name) == 0)
+		if (index(sp->bcptr->name, '*'))
+			if (matches(sp->bcptr->name, name) == 0)
 					break;
 	    }
-	return (c2ptr ? c2ptr : cptr);
+	return (sp ? sp->bcptr : cptr);
 }
 #else
 aClient	*find_server(name, cptr)
 char	*name;
 aClient	*cptr;
 {
-	Reg1	aClient *c2ptr = cptr;
+	Reg	aClient *c2ptr = cptr;
 
 	if (!name)
 		return c2ptr;
@@ -245,7 +261,7 @@ aClient	*cptr;
 	    }
 	return (c2ptr ? c2ptr : cptr);
 }
-#endif
+#endif /* CLIENT_COMPILE */
 
 /*
 **  Find person by (nick)name.
@@ -254,7 +270,7 @@ aClient *find_person(name, cptr)
 char	*name;
 aClient *cptr;
     {
-	Reg1	aClient	*c2ptr = cptr;
+	Reg	aClient	*c2ptr = cptr;
 
 	c2ptr = find_client(name, c2ptr);
 
@@ -266,19 +282,27 @@ aClient *cptr;
 
 /*
  * parse a buffer.
+ * Return values:
+ *  errors: -3 for unknown origin/sender, -2 for FLUSH_BUFFER, -1 for bad cptr
  *
  * NOTE: parse() should not be called recusively by any other fucntions!
  */
-int	parse(cptr, buffer, bufend, mptr)
+int	parse(cptr, buffer, bufend)
 aClient *cptr;
 char	*buffer, *bufend;
-struct	Message *mptr;
     {
-	Reg1	aClient *from = cptr;
-	Reg2	char *ch, *s;
-	Reg3	int	len, i, numeric, paramcount;
+	Reg	aClient *from = cptr;
+	Reg	char	*ch, *s;
+	Reg	int	len, i, numeric, paramcount;
+	Reg	struct	Message *mptr = NULL;
+	int	ret;
 
-	Debug((DEBUG_DEBUG,"Parsing: %s", buffer));
+#ifndef	CLIENT_COMPILE
+	Debug((DEBUG_DEBUG, "Parsing %s: %s",
+		get_client_name(cptr, FALSE), buffer));
+	if (IsDead(cptr))
+		return -1;
+#endif
 
 	s = sender;
 	*s = '\0';
@@ -296,15 +320,15 @@ struct	Message *mptr;
 				*s++ = *ch; /* leave room for NULL */
 		*s = '\0';
 #ifdef CLIENT_COMPILE
-		if (s = index(sender, '!'))
+		if ((s = index(sender, '!')))
 		    {
 			*s++ = '\0';
-			(void)strncpy(userhost, s, sizeof(userhost));
+			strncpyzt(userhost, s, sizeof(userhost));
 		    }
-		else if (s = index(sender, '@'))
+		else if ((s = index(sender, '@')))
 		    {
 			*s++ = '\0';
-			(void)strncpy(userhost, s, sizeof(userhost));
+			strncpyzt(userhost, s, sizeof(userhost));
 		    }
 #endif
 		/*
@@ -324,8 +348,11 @@ struct	Message *mptr;
 			if (!from || matches(from->name, sender))
 				from = find_server(sender, (aClient *)NULL);
 #ifndef	CLIENT_COMPILE
-			else if (!from && index(sender, '@'))
-				from = find_nickserv(sender, (aClient *)NULL);
+			else if (!from && index(sender, '@') &&
+				 !(from = find_nickserv(sender, NULL)))
+				from = find_service(sender, (aClient *)NULL);
+			if (!from)
+				from = find_mask(sender, (aClient *) NULL);
 #endif
 
 			para[0] = sender;
@@ -335,6 +362,7 @@ struct	Message *mptr;
 			 * action??? Now, I will ignore the message
 			 * (old IRC just let it through as if the
 			 * prefix just wasn't there...) --msa
+			 * Since 2.9 we pick them up and .. --Vesa
 			 */
 			if (!from)
 			    {
@@ -345,7 +373,7 @@ struct	Message *mptr;
 #ifndef	CLIENT_COMPILE
 				remove_unknown(cptr, sender);
 #endif
-				return -1;
+				return -3;	/* Grab it in read_message() */
 			    }
 			if (from->from != cptr)
 			    {
@@ -354,7 +382,7 @@ struct	Message *mptr;
 					"Message (%s) coming from (%s)",
 					buffer, cptr->name));
 #ifndef	CLIENT_COMPILE
-				return cancel_clients(cptr, from);
+				return cancel_clients(cptr, from, buffer);
 #else
 				return -1;
 #endif
@@ -368,7 +396,7 @@ struct	Message *mptr;
 		ircstp->is_empt++;
 		Debug((DEBUG_NOTICE, "Empty message from host %s:%s",
 		      cptr->name, from->name));
-		return(-1);
+		return -1;
 	    }
 	/*
 	** Extract the command code from the packet.  Point s to the end
@@ -382,7 +410,6 @@ struct	Message *mptr;
 	if (len == 3 &&
 	    isdigit(*ch) && isdigit(*(ch + 1)) && isdigit(*(ch + 2)))
 	    {
-		mptr = NULL;
 		numeric = (*ch - '0') * 100 + (*(ch + 1) - '0') * 10
 			+ (*(ch + 2) - '0');
 		paramcount = MAXPARA;
@@ -392,7 +419,7 @@ struct	Message *mptr;
 	    {
 		if (s)
 			*s++ = '\0';
-		for (; mptr->cmd; mptr++) 
+		for (mptr = msgtab; mptr->cmd; mptr++) 
 			if (mycmp(mptr->cmd, ch) == 0)
 				break;
 
@@ -411,6 +438,7 @@ struct	Message *mptr;
 			*/
 			if (buffer[0] != '\0')
 			    {
+				cptr->flags |= FLAGS_UNKCMD;
 				if (IsPerson(from))
 					sendto_one(from,
 					    ":%s %d %s %s :Unknown command",
@@ -419,32 +447,35 @@ struct	Message *mptr;
 #ifdef	CLIENT_COMPILE
 				Debug((DEBUG_ERROR,"Unknown (%s) from %s[%s]",
 					ch, cptr->name, cptr->sockhost));
-				/*
-				** This concerns only client ... --Armin
-				*/
-				if (me.user)
-					Debug((DEBUG_ERROR,
-						"*** Error: %s %s from server",
-						"Unknown command", ch));
 #else
+				else if (IsServer(cptr))
+					sendto_flag(SCH_ERROR,
+					    "Unknown command from %s:%s",
+					    get_client_name(cptr, TRUE), ch);
 				Debug((DEBUG_ERROR,"Unknown (%s) from %s",
 					ch, get_client_name(cptr, TRUE)));
 #endif
 			    }
 			ircstp->is_unco++;
-			return(-1);
+			return -1;
 		    }
 		paramcount = mptr->parameters;
 		i = bufend - ((s) ? s : ch);
 		mptr->bytes += i;
+#ifndef	CLIENT_COMPILE
 		if ((mptr->flags & 1) && !(IsServer(cptr) || IsService(cptr)))
-			cptr->since += (2 + i / 120);
+		    {
+			cptr->since += (2 + i / 120) + mptr->penalty;
 					/* Allow only 1 msg per 2 seconds
 					 * (on average) to prevent dumping.
 					 * to keep the response rate up,
 					 * bursts of up to 5 msgs are allowed
 					 * -SRB
 					 */
+			if (mptr->func != m_ison && mptr->func != m_mode)
+				cptr->ract += (2 + i /120);
+		    }
+#endif
 	    }
 	/*
 	** Must the following loop really be so devious? On
@@ -495,18 +526,42 @@ struct	Message *mptr;
 	para[++i] = NULL;
 	if (mptr == NULL)
 		return (do_numeric(numeric, cptr, from, i, para));
-	else
-	    {
-		mptr->count++;
-		if (IsRegisteredUser(cptr) &&
+	mptr->count++;
+	if (IsRegisteredUser(cptr) &&
 #ifdef	IDLE_FROM_MSG
-		    mptr->func == m_private)
+	    mptr->func == m_private)
 #else
-		    mptr->func != m_ping && mptr->func != m_pong)
+	    mptr->func != m_ping && mptr->func != m_pong)
 #endif
-			from->user->last = time(NULL);
-		return (*mptr->func)(cptr, from, i, para);
+		from->user->last = timeofday;
+	Debug((DEBUG_DEBUG, "Function: %#x = %s parc %d parv %#x",
+		mptr->func, mptr->cmd, i, para));
+#ifndef	CLIENT_COMPILE
+	if ((mptr->flags & MSG_PP) && !(IsServer(cptr) || IsService(cptr)) &&
+	    i > 2)
+		cptr->since += (i - 2);
+	if ((mptr->flags & MSG_REGU) && check_registered_user(from))
+		return -1;
+	if ((mptr->flags & MSG_SVC) && check_registered_service(from))
+		return -1;
+	if ((mptr->flags & MSG_REG) && check_registered(from))
+		return -1;
+	if ((mptr->flags & MSG_NOU) && MyPerson(from))
+	    {
+		sendto_one(from, err_str(ERR_ALREADYREGISTRED, para[0]));
+		return-1;
 	    }
+	if (MyConnect(from) && !IsPrivileged(from) &&
+	    (mptr->flags & (MSG_LOP|MSG_OP)))
+	    {
+		sendto_one(from, err_str(ERR_NOPRIVILEGES, para[0]));
+		return -1;
+	    }
+#endif
+	ret = (*mptr->func)(cptr, from, i, para);
+	if (ret > 0)
+		cptr->since += ret;
+	return (ret != FLUSH_BUFFER) ? 2 : FLUSH_BUFFER;
     }
 
 /*
@@ -537,24 +592,28 @@ char	*newline;
 }
 
 #ifndef	CLIENT_COMPILE
-static	int	cancel_clients(cptr, sptr)
+static	int	cancel_clients(cptr, sptr, cmd)
 aClient	*cptr, *sptr;
+char	*cmd;
 {
 	/*
 	 * kill all possible points that are causing confusion here,
 	 * I'm not sure I've got this all right...
 	 * - avalon
 	 */
-	sendto_ops("Message for %s[%s!%s@%s] from %s",
-		   sptr->name, sptr->from->name, sptr->from->username,
-		   sptr->from->sockhost, get_client_name(cptr, TRUE));
+	sendto_flag(SCH_NOTICE, "Message (%s) for %s[%s!%s@%s] from %s",
+		    cmd, sptr->name, sptr->from->name, sptr->from->username,
+		    sptr->from->sockhost, get_client_name(cptr, TRUE));
 	/*
 	 * Incorrect prefix for a server from some connection.  If it is a
 	 * client trying to be annoying, just QUIT them, if it is a server
 	 * then the same deal.
 	 */
 	if (IsServer(sptr) || IsMe(sptr))
+	    {
+		sendto_flag(SCH_NOTICE, "Dropping server %s",cptr->name);
 		return exit_client(cptr, cptr, &me, "Fake Direction");
+	    }
 	/*
 	 * Ok, someone is trying to impose as a client and things are
 	 * confused.  If we got the wrong prefix from a server, send out a
@@ -567,7 +626,7 @@ aClient	*cptr, *sptr;
 				   sptr->name, sptr->from->name,
 				   get_client_name(cptr, TRUE));
 		sptr->flags |= FLAGS_KILLED;
-		return exit_client(sptr, sptr, &me, "Fake Prefix");
+		return exit_client(cptr, sptr, &me, "Fake Prefix");
 	    }
 	return exit_client(cptr, cptr, &me, "Fake prefix");
 }
@@ -583,17 +642,20 @@ char	*sender;
 	 */
 	if (!IsServer(cptr))
 		return;
-	sendto_ops("Got unknown prefix (%s) from %s",
-		   sender, get_client_name(cptr, FALSE));
 	/*
 	 * Do kill if it came from a server because it means there is a ghost
 	 * user on the other server which needs to be removed. -avalon
+	 * it can simply be caused by lag (among other things), so just
+	 * drop it if it is not a server. -krys
 	 */
-	if (!index(sender, '.'))
-		sendto_one(cptr, ":%s KILL %s :%s (%s(?) <- %s)",
-			   me.name, sender, me.name, sender,
-			   get_client_name(cptr, FALSE));
-	else
+	sendto_flag(SCH_LOCAL, "Dropping unknown %s brought by %s.",
+		    sender, get_client_name(cptr, FALSE));
+	/*
+	 * squit if it is a server because it means something is really
+	 * wrong.
+	 */
+	if (index(sender, '.') /* <- buggy, it could be a service! */
+	    && !index(sender, '@')) /* better.. */
 		sendto_one(cptr, ":%s SQUIT %s :(Unknown from %s)",
 			   me.name, sender, get_client_name(cptr, FALSE));
 }

@@ -28,6 +28,7 @@ char debug_id[] = "debug.c v2.0 (c) 1988 University of Oulu, Computing Center an
 #ifdef HPUX
 #include <fcntl.h>
 #endif
+#include "irc.h"
 
 extern int debuglevel;
 struct	stats	ircst, *ircstp = &ircst;
@@ -43,5 +44,9 @@ char *form, *p1, *p2, *p3, *p4, *p5, *p6, *p7, *p8, *p9, *p10;
       sprintf(buf, form, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10);
       putline(buf);
     }
+}
+#else /* do nothing */
+void	debug()
+{
 }
 #endif

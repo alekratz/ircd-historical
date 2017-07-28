@@ -19,29 +19,34 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)bsd.c	2.10 4/30/93 (C) 1988 University of Oulu, \
+static  char sccsid[] = "%W% %G% (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 
 #include "struct.h"
 #include "common.h"
 #include "sys.h"
+#include "h.h"
 #include <signal.h>
 
+#ifndef SYS_ERRLIST_DECLARED
 extern	int errno; /* ...seems that errno.h doesn't define this everywhere */
 extern	char	*sys_errlist[];
+#endif
 
 #ifdef DEBUGMODE
-int	writecalls = 0, writeb[10];
+int	writecalls = 0, writeb[10] = {0,0,0,0,0,0,0,0,0,0};
 #endif
 VOIDSIG dummy()
 {
 #ifndef HAVE_RELIABLE_SIGNALS
 	(void)signal(SIGALRM, dummy);
 	(void)signal(SIGPIPE, dummy);
-#ifndef HPUX	/* Only 9k/800 series require this, but don't know how to.. */
+# ifndef HPUX	/* Only 9k/800 series require this, but don't know how to.. */
+#  ifdef SIGWINCH
 	(void)signal(SIGWINCH, dummy);
-#endif
+#  endif
+# endif
 #else
 # ifdef POSIX_SIGNALS
 	struct  sigaction       act;
@@ -51,10 +56,14 @@ VOIDSIG dummy()
 	(void)sigemptyset(&act.sa_mask);
 	(void)sigaddset(&act.sa_mask, SIGALRM);
 	(void)sigaddset(&act.sa_mask, SIGPIPE);
+#  ifdef SIGWINCH
 	(void)sigaddset(&act.sa_mask, SIGWINCH);
+#  endif
 	(void)sigaction(SIGALRM, &act, (struct sigaction *)NULL);
 	(void)sigaction(SIGPIPE, &act, (struct sigaction *)NULL);
+#  ifdef SIGWINCH
 	(void)sigaction(SIGWINCH, &act, (struct sigaction *)NULL);
+#  endif
 # endif
 #endif
 }
@@ -85,14 +94,14 @@ int	len;
 char	*str;
     {
 	int	retval;
+	aClient	*acpt = cptr->acpt;
 
-#ifdef DEBUGMODE
-	if (writecalls == 0)
-		for (retval = 0; retval < 10; retval++)
-			writeb[retval] = 0;
+#ifdef	DEBUGMODE
 	writecalls++;
 #endif
+#ifndef	NOWRITEALARM
 	(void)alarm(WRITEWAITDELAY);
+#endif
 #ifdef VMS
 	retval = netwrite(cptr->fd, str, len);
 #else
@@ -105,26 +114,35 @@ char	*str;
 	**
 	** ...now, would this work on VMS too? --msa
 	*/
-# ifdef	linux
 	if (retval < 0 && (errno == EWOULDBLOCK || errno == EAGAIN ||
+#ifdef	EMSGSIZE
+			   errno == EMSGSIZE ||
+#endif
 			   errno == ENOBUFS))
-# else
-	if (retval < 0 && (errno == EWOULDBLOCK || errno == ENOBUFS))
-# endif
 	    {
 		retval = 0;
 		cptr->flags |= FLAGS_BLOCKED;
 	    }
 	else if (retval > 0)
+	    {
+#ifdef	pyr
+		(void)gettimeofday(&cptr->lw, NULL);
+#endif
 		cptr->flags &= ~FLAGS_BLOCKED;
+	    }
 
 #endif
+#ifndef	NOWRITEALARM
 	(void )alarm(0);
+#endif
 #ifdef DEBUGMODE
 	if (retval < 0) {
 		writeb[0]++;
 		Debug((DEBUG_ERROR,"write error (%s) to %s",
 			sys_errlist[errno], cptr->name));
+#ifndef	CLIENT_COMPILE
+		hold_server(cptr);
+#endif
 	} else if (retval == 0)
 		writeb[1]++;
 	else if (retval < 16)
@@ -144,5 +162,33 @@ char	*str;
 	else
 		writeb[9]++;
 #endif
+	if (retval > 0)
+	    {
+#if defined(DEBUGMODE) && defined(DEBUG_WRITE)
+		Debug((DEBUG_WRITE, "send = %d bytes to %d[%s]:[%*.*s]\n",
+			retval, cptr->fd, cptr->name, retval, retval, str));
+#endif
+		cptr->sendB += retval;
+		me.sendB += retval;
+		if (cptr->sendB > 1023)
+		    {
+			cptr->sendK += (cptr->sendB >> 10);
+			cptr->sendB &= 0x03ff;	/* 2^10 = 1024, 3ff = 1023 */
+		    }
+		if (acpt != &me)
+		    {
+			acpt->sendB += retval;
+			if (acpt->sendB > 1023)
+			    {
+				acpt->sendK += (acpt->sendB >> 10);
+				acpt->sendB &= 0x03ff;
+			    }
+		    }
+		else if (me.sendB > 1023)
+		    {
+			me.sendK += (me.sendB >> 10);
+			me.sendB &= 0x03ff;
+		    }
+	    }
 	return(retval);
 }
