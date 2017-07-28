@@ -18,7 +18,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)s_auth.c	1.12 3/27/93 (C) 1992 Darren Reed";
+static  char sccsid[] = "@(#)s_auth.c	1.16 5/8/93 (C) 1992 Darren Reed";
 #endif
 
 #include "struct.h"
@@ -66,6 +66,13 @@ Reg1	aClient	*cptr;
 		if (!DoingDNS(cptr))
 			SetAccess(cptr);
 		ircstp->is_abad++;
+		return;
+	    }
+	if (cptr->authfd >= MAXCONNECTIONS)
+	    {
+		sendto_ops("Can't allocate fd for auth on %s",
+			   get_client_name(cptr, TRUE));
+		(void)close(cptr->authfd);
 		return;
 	    }
 
@@ -139,6 +146,9 @@ aClient	*cptr;
 authsenderr:
 		ircstp->is_abad++;
 		(void)close(cptr->authfd);
+		if (cptr->authfd == highest_fd)
+			while (!local[highest_fd])
+				highest_fd--;
 		cptr->authfd = -1;
 		cptr->flags &= ~(FLAGS_AUTH|FLAGS_WRAUTH);
 		if (!DoingDNS(cptr))
@@ -162,8 +172,8 @@ Reg1	aClient	*cptr;
 {
 	Reg1	char	*s, *t;
 	Reg2	int	len;
-	char	ruser[USERLEN+1];
-	u_short	remote = 0, local = 0;
+	char	ruser[USERLEN+1], tuser[USERLEN+1];
+	u_short	remp = 0, locp = 0;
 
 	*ruser = '\0';
 	Debug((DEBUG_NOTICE,"read_authports(%x) fd %d authfd %d stat %d",
@@ -183,8 +193,9 @@ Reg1	aClient	*cptr;
 	    }
 
 	if ((len > 0) && (cptr->count != sizeof(cptr->buffer) - 1) &&
-	    (sscanf(cptr->buffer, "%hd , %hd: USERID : %*[^:]:",
-		    &remote, &local) == 2) && (s = rindex(cptr->buffer, ':')))
+	    (sscanf(cptr->buffer, "%hd , %hd : USERID : %*[^:]: %10s",
+		    &remp, &locp, tuser) == 3) &&
+	    (s = rindex(cptr->buffer, ':')))
 	    {
 		for (++s, t = ruser; *s && (t < ruser + sizeof(ruser)); s++)
 			if (!isspace(*s) && *s != ':')
@@ -194,12 +205,14 @@ Reg1	aClient	*cptr;
 	    }
 	else if (len != 0)
 	    {
-		ircstp->is_abad++;
-		Debug((DEBUG_ERROR,"local %d remote %d s %x",local,remote,s));
+		Debug((DEBUG_ERROR,"local %d remote %d s %x", locp, remp, s));
 		Debug((DEBUG_ERROR,"bad auth reply in [%s]", cptr->buffer));
-		return;
+		*ruser = '\0';
 	    }
 	(void)close(cptr->authfd);
+	if (cptr->authfd == highest_fd)
+		while (!local[highest_fd])
+			highest_fd--;
 	cptr->count = 0;
 	cptr->authfd = -1;
 	ClearAuth(cptr);
@@ -208,17 +221,15 @@ Reg1	aClient	*cptr;
 	if (len > 0)
 		Debug((DEBUG_INFO,"ident reply: [%s]", cptr->buffer));
 
-	if (!local || !remote || !*ruser)
+	if (!locp || !remp || !*ruser)
 	    {
-		sendto_ops("ident reply error for %s",
-			   get_client_name(cptr, TRUE));
 		ircstp->is_abad++;
+		(void)strcpy(cptr->username, "unknown");
+		return;
 	    }
-	else
-		ircstp->is_asuc++;
-
-	if (*ruser)
-		strncpyzt(cptr->username, ruser, USERLEN+1);
+	ircstp->is_asuc++;
+	strncpyzt(cptr->username, ruser, USERLEN+1);
+	cptr->flags |= FLAGS_GOTID;
 	Debug((DEBUG_INFO, "got username [%s]", ruser));
 	return;
 }

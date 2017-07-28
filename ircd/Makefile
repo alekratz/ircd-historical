@@ -20,16 +20,16 @@
 CC=/bin/cc
 RM=/bin/rm
 CP=/bin/cp
-TOUCH=/bin/touch
+TOUCH=touch
 SHELL=/bin/sh
-BINDIR=/home/sorokin/avalon/ircd
+BINDIR=/usr/local/lib/ircd
 INSTALL=/usr/bin/install
 
 # IRCDMODE given in top level Makefile, but added here to make sure
 # compilation works if started in ircd subdirectory
 
 IRCDMODE=711
-IRCDDIR=/home/sorokin/avalon/ircd
+IRCDDIR=/usr/local/lib/ircd
 INCLUDE=../include
 
 # For MIPS, use the following:
@@ -49,8 +49,12 @@ IRCDLIBS=
 # HPUX:
 #IRCDLIBS=-lBSD
 #
-# Solaris 2.0
-#IRCDLIBS= -lsocket -lnsl
+# Solaris 2
+#IRCDLIBS= -lsocket -lnsl -lresolv
+#
+# ESIX
+#CFLAGS=-O -I${INCLUDE} -I/usr/ucbinclude
+#IRCDLIBS=-L/usr/ucblib -L/usr/lib -lsocket -lucb -lresolv -lns -lnsl
 #
 #When profiling:
 #IRCDLIBS=-lc_p
@@ -70,7 +74,7 @@ LINTFLAGS=-hba
 # are not part of your system libraries.  In all cases you should try your
 # system libraries before these.
 #
-RES=res_init.o res_comp.o res_mkquery.o
+#RES=res_init.o res_comp.o res_mkquery.o
 
 COMMONOBJS=../common/bsd.o ../common/dbuf.o \
            ../common/packet.o ../common/send.o\
@@ -78,7 +82,7 @@ COMMONOBJS=../common/bsd.o ../common/dbuf.o \
 
 OBJS=channel.o class.o hash.o ircd.o list.o res.o s_auth.o s_bsd.o s_conf.o \
 	s_debug.o s_err.o s_misc.o s_numeric.o s_serv.o s_user.o whowas.o \
-	$(RES) $(COMMONOBJS)
+	note.o $(RES) $(COMMONOBJS)
 
 SRC=$(OBJS:%.o=%.c)
 
@@ -90,13 +94,17 @@ MAKE = make 'CFLAGS=${CFLAGS}' 'CC=${CC}' 'IRCDLIBS=${IRCDLIBS}' \
 
 all: build
 
-build: ircd
+build: ircd chkconf
 
 ircd: $(OBJS) ../include/patchlevel.h
 	$(SHELL) version.c.SH
 	$(CC) $(CFLAGS) -c version.c
 	$(CC) $(CFLAGS) $(OBJS) version.o $(LDFLAGS) $(IRCDLIBS) -o ircd
 	chmod $(IRCDMODE) ircd
+
+chkconf: ../include/struct.h ../include/config.h ../include/sys.h \
+	 ../include/common.h chkconf.c
+	$(CC) $(CFLAGS) chkconf.c -o chkconf
 
 saber: $(SRC)
 	#load $(SRC) $(COMMONSRC) version.c $(IRCDLIBS)
@@ -127,18 +135,20 @@ lint:
 	(cd ../common; $(MAKE) build);
 
 install: all
-	if [ ! -d ${IRCDDIR} -a ! -f ${IRCDDIR} ] ; then \
-		mkdir ${IRCDDIR}; \
+	-if [ ! -d ${IRCDDIR} -a ! -f ${IRCDDIR} ] ; then \
+		-mkdir ${IRCDDIR}; \
 	fi
-	$(INSTALL) -csm ${IRCDMODE} ircd ${BINDIR}
+	../install -c -s -m ${IRCDMODE} ircd ${BINDIR}
+	../install -c -s -m 700 chkconf ${BINDIR}
 	$(CP) ../doc/example.conf ${IRCDDIR}
 	$(TOUCH) ${IRCDDIR}/ircd.motd
 	$(RM) -f ${IRCDDIR}/ircd.m4
 	$(TOUCH) ${IRCDDIR}/ircd.m4
+	chmod +x ./buildm4
 	./buildm4 ${IRCDDIR}
 
 clean:
-	$(RM) -f *.o *~ core ircd version.c #* *.bak
+	$(RM) -f *.o *~ core ircd version.c #* *.bak chkconf
 
 depend:
 	makedepend -I${INCLUDE} ${SRC}
@@ -174,8 +184,8 @@ s_conf.o: s_conf.c ../include/struct.h ../include/config.h \
 	  ../include/numeric.h  ../include/dbuf.h ../include/sys.h
 	$(CC) $(CFLAGS) -c s_conf.c
 
-s_debug.o: ../include/struct.h ../include/common.h ../include/sys.h \
-	   s_debug.c
+s_debug.o: ../include/config.h ../include/struct.h ../include/common.h \
+	   ../include/sys.h s_debug.c
 	$(CC) $(CFLAGS) -c s_debug.c
 
 s_misc.o: s_misc.c ../include/struct.h ../include/config.h ../include/dbuf.h
@@ -222,6 +232,8 @@ s_bsd.o: ../include/struct.h ../include/config.h ../include/dbuf.h
 s_bsd.o: ../include/sys.h
 s_auth.o: ../include/struct.h ../include/config.h ../include/dbuf.h
 s_auth.o: ../include/sys.h
+s_debug.o: ../include/config.h ../include/struct.h ../include/common.h
+s_debug.o: ../include/sys.h s_debug.c
 s_conf.o: ../include/struct.h ../include/config.h ../include/numeric.h
 s_conf.o: ../include/dbuf.h ../include/sys.h
 s_user.o: ../include/struct.h ../include/config.h
@@ -241,4 +253,6 @@ s_debug.o: ../include/struct.h ../include/common.h ../include/sys.h
 class.o: ../include/struct.h ../include/class.h ../include/numeric.h
 class.o: ../include/common.h
 hash.o: ../include/struct.h ../include/sys.h ../include/hash.h
+hash.o: ../include/struct.h ../include/sys.h ../include/hash.h s_serv.c
+hash.o: s_user.c channel.c s_misc.c s_bsd.c ircd.c hash.c version.c.SH
 version.o: version.c.SH

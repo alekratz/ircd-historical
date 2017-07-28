@@ -19,7 +19,7 @@
  */
 
 #ifndef lint
-static	char sccsid[] = "@(#)ircd.c	2.36 3/22/93 (C) 1988 University of Oulu, \
+static	char sccsid[] = "@(#)ircd.c	2.43 6/21/93 (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 
@@ -31,9 +31,7 @@ Computing Center and Jarkko Oikarinen";
 #include <sys/stat.h>
 #include <pwd.h>
 #include <signal.h>
-#if defined(DYNIXPTX) || defined(SOL20) || defined(SVR3)
 #include <fcntl.h>
-#endif
 #include "h.h"
 
 aClient me;			/* That's me */
@@ -50,13 +48,16 @@ int	debuglevel = -1;		/* Server debug level */
 int	bootopt = 0;			/* Server boot option flags */
 char	*debugmode = "";		/*  -"-    -"-   -"-  */
 static	int	dorehash = 0;
+static	char	*dpath = DPATH;
 
-time_t	nextconnect = -1;		/* time for next try_connections call */
-time_t	nextping = -1;		/* same as above for check_pings() */
-time_t	nextdnscheck = -1;	/* next time to poll dns to force timeouts */
-time_t	nextexpire = -1;	/* next expire run on the dns cache */
+time_t	nextconnect = 1;	/* time for next try_connections call */
+time_t	nextping = 1;		/* same as above for check_pings() */
+time_t	nextdnscheck = 0;	/* next time to poll dns to force timeouts */
+time_t	nextexpire = 1;	/* next expire run on the dns cache */
 
 #ifdef	PROFIL
+extern	etext();
+
 VOIDSIG	s_monitor()
 {
 	static	int	mon = 0;
@@ -143,13 +144,15 @@ void	server_reboot()
 #ifdef USE_SYSLOG
 	(void)closelog();
 #endif
-	for (i = 0; i < MAXCONNECTIONS; i++)
-		if (i == 2 && (bootopt & BOOT_TTY) ||
-		    i == 0 && (bootopt & (BOOT_OPER|BOOT_INETD)))
-			continue;
-		else
-			(void)close(i);
-	(void)execv(MYNAME, myargv);
+	for (i = 3; i < MAXCONNECTIONS; i++)
+		(void)close(i);
+	if (!(bootopt & (BOOT_TTY|BOOT_DEBUG)))
+		(void)close(2);
+	(void)close(1);
+	if ((bootopt & BOOT_CONSOLE) || isatty(0))
+		(void)close(0);
+	if (!(bootopt & (BOOT_INETD|BOOT_OPER)))
+		(void)execv(MYNAME, myargv);
 #ifdef USE_SYSLOG
 	/* Have to reopen since it has been closed above */
 
@@ -157,7 +160,7 @@ void	server_reboot()
 	syslog(LOG_CRIT, "execv(%s,%s) failed: %m\n", MYNAME, myargv[0]);
 	closelog();
 #endif
-	Debug((DEBUG_FATAL,"Couldn't restart server !!!!!!!!"));
+	Debug((DEBUG_FATAL,"Couldn't restart server: %s", strerror(errno)));
 	exit(-1);
 }
 
@@ -229,7 +232,7 @@ time_t	currenttime;
 	    {
 		if (con_conf->next)  /* are we already last? */
 		    {
-			for (pconf = &conf; aconf = *pconf;
+			for (pconf = &conf; (aconf = *pconf);
 			     pconf = &(aconf->next))
 				/* put the current one at the end and
 				 * make sure we try all connections
@@ -255,7 +258,7 @@ time_t	currenttime;
 	int	ping = 0, i, rflag = 0;
 	time_t	oldest = 0, timeout;
 
-	for (i = 0; i < MAXCONNECTIONS; i++)
+	for (i = 0; i <= highest_fd; i++)
 	    {
 		if (!(cptr = local[i]) || IsMe(cptr) || IsLog(cptr))
 			continue;
@@ -297,6 +300,25 @@ time_t	currenttime;
 		    (!IsRegistered(cptr) &&
 		     (currenttime - cptr->since) >= ping))
 		    {
+			if (!IsRegistered(cptr) &&
+			    (DoingDNS(cptr) || DoingAuth(cptr)))
+			    {
+				if (cptr->authfd >= 0)
+				    {
+					(void)close(cptr->authfd);
+					cptr->authfd = -1;
+					cptr->count = 0;
+					*cptr->buffer = '\0';
+				    }
+				Debug((DEBUG_NOTICE,"DNS/AUTH timeout %s",
+					get_client_name(cptr,TRUE)));
+				del_queries((char *)cptr);
+				ClearAuth(cptr);
+				ClearDNS(cptr);
+				SetAccess(cptr);
+				cptr->since = currenttime;
+				continue;
+			    }
 			if (IsServer(cptr) || IsConnecting(cptr) ||
 			    IsHandshake(cptr))
 				sendto_ops("No response from %s, closing link",
@@ -382,7 +404,7 @@ char	*argv[];
 	(void)signal(SIGUSR1, s_monitor);
 #endif
 
-	if (chdir(DPATH))
+	if (chdir(dpath))
 	    {
 		perror("chdir");
 		exit(-1);
@@ -432,7 +454,11 @@ char	*argv[];
 		    case 'q':
 			bootopt |= BOOT_QUICK;
 			break;
-		    case 'd': /* Per user local daemon... */
+		    case 'd' :
+                        (void)setuid((uid_t)getuid());
+			dpath = p;
+			break;
+		    case 'o': /* Per user local daemon... */
                         (void)setuid((uid_t)getuid());
 			bootopt |= BOOT_OPER;
 		        break;
@@ -523,16 +549,16 @@ char	*argv[];
 	if (portnum < 0)
 		portnum = PORTNUM;
 	me.port = portnum;
-	(void)init_sys(bootopt);
-	me.flags = 0;
+	(void)init_sys();
+	me.flags = FLAGS_LISTEN;
 	if (bootopt & BOOT_INETD)
 	    {
 		me.fd = 0;
 		local[0] = &me;
 		me.flags = FLAGS_LISTEN;
 	    }
-	else if (!(bootopt & BOOT_OPER))
-		me.flags = FLAGS_LISTEN;
+	else
+		me.fd = -1;
 
 #ifdef USE_SYSLOG
 	openlog(myargv[0], LOG_PID|LOG_NDELAY, LOG_FACILITY);
@@ -555,6 +581,9 @@ char	*argv[];
 		if (inetport(&me, "*", portnum))
 			exit(1);
 	    }
+	else if (inetport(&me, "*", 0))
+		exit(1);
+		
 	(void)get_my_name(&me, me.sockhost, sizeof(me.sockhost)-1);
 	if (me.name[0] == '\0')
 		strncpyzt(me.name, me.sockhost, sizeof(me.name));
@@ -599,7 +628,7 @@ char	*argv[];
 		/*
 		** DNS checks. One to timeout queries, one for cache expiries.
 		*/
-		if (nextdnscheck && now >= nextdnscheck)
+		if (now >= nextdnscheck)
 			nextdnscheck = timeout_query_list(now);
 		if (now >= nextexpire)
 			nextexpire = expire_cache(now);
@@ -612,8 +641,7 @@ char	*argv[];
 			delay = MIN(nextping, nextconnect);
 		else
 			delay = nextping;
-		if (nextdnscheck)
-			delay = MIN(nextdnscheck, delay);
+		delay = MIN(nextdnscheck, delay);
 		delay = MIN(nextexpire, delay);
 		delay -= now;
 		/*
@@ -647,7 +675,7 @@ char	*argv[];
 
 		if (dorehash)
 		    {
-			(void)rehash(1);
+			(void)rehash(&me, &me, 1);
 			dorehash = 0;
 		    }
 		/*
@@ -686,8 +714,8 @@ static	void	open_debugfile()
 		local[2] = cptr;
 		(void)strcpy(cptr->sockhost, me.sockhost);
 
-		(void)printf("isatty = %d ttyname = %x\n",
-			isatty(2),ttyname(2));
+		(void)printf("isatty = %d ttyname = %#x\n",
+			isatty(2), (u_int)ttyname(2));
 		if (!(bootopt & BOOT_TTY)) /* leave debugging output on fd 2 */
 		    {
 			(void)truncate(LOGFILE, 0);

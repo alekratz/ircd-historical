@@ -1,6 +1,9 @@
 /*
  * irc2.7.2/ircd/res.h (C)opyright 1992 Darren Reed.
  */
+#ifndef	__res_include__
+#define	__res_include__
+
 #define	RES_INITLIST	1
 #define	RES_CALLINIT	2
 #define RES_INITSOCK	4
@@ -53,7 +56,8 @@ typedef struct	cachetable {
 	aCache	*name_list;
 	} CacheTable;
 
-#define CACHESIZE	51
+#define ARES_CACSIZE	51
 
 #define	MAXCACHED	30
 
+#endif /* __res_include__ */

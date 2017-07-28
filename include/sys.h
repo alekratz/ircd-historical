@@ -17,6 +17,8 @@
  *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#ifndef	__sys_include__
+#define __sys_include__
 #ifdef ISC202
 #include <net/errno.h>
 #else
@@ -30,7 +32,8 @@
 #include <stdlib.h>
 #endif
 
-#if defined(HPUX) || defined(VMS) || defined(AIX) || defined(SOL20)
+#if defined(HPUX) || defined(VMS) || defined(AIX) || defined(SOL20) || \
+    defined(ESIX) || defined(DYNIXPTX)
 #include <string.h>
 #define bcopy(a,b,s)  memcpy(b,a,s)
 #define bzero(a,s)    memset(a,0,s)
@@ -42,11 +45,15 @@ extern char *inet_ntoa();
 #define rindex strrchr
 # endif
 #else 
+# if !defined(DYNIXPTX)
 #include <strings.h>
 extern	char	*index();
 extern	char	*rindex();
+#  ifndef	NEED_STRCASECMP
 extern	int	strcasecmp();
 extern	int	strncasecmp();
+#  endif
+# endif
 #endif
 
 #ifdef AIX
@@ -88,3 +95,5 @@ typedef	unsigned int	u_int;
 #ifdef	USE_VARARGS
 #include <varargs.h>
 #endif
+
+#endif /* __sys_include__ */

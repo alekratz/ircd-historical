@@ -18,6 +18,9 @@
  *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#ifndef	__struct_include__
+#define __struct_include__
+
 #include "config.h"
 
 #include <stdio.h>
@@ -25,11 +28,14 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #if defined(SGI) || defined(AIX)
-#include <stddef.h>
+# include <stddef.h>
 #endif
 
 #ifdef USE_SYSLOG
-#include <sys/syslog.h>
+# include <syslog.h>
+# ifndef HPUX
+#  include <sys/syslog.h>
+# endif
 #endif
 
 typedef	struct	ConfItem aConfItem;
@@ -61,6 +67,8 @@ typedef	struct	SMode	Mode;
 #define	KEYLEN		23
 #define	BUFSIZE		512		/* WARNING: *DONT* CHANGE THIS!!!! */
 #define	MAXRECIPIENTS 	20
+#define	MAXBANS		20
+#define	MAXBANLENGTH	1024
 
 #define	USERHOST_REPLYLEN	(NICKLEN+HOSTLEN+USERLEN+5)
 
@@ -143,6 +151,9 @@ typedef	struct	SMode	Mode;
 #define	FLAGS_AUTH	 0x4000 /* client is waiting on rfc931 response */
 #define	FLAGS_WRAUTH	 0x8000	/* set if we havent writen to ident server */
 #define	FLAGS_LOCAL	0x10000 /* set for local clients */
+#define	FLAGS_GOTID	0x20000	/* successful ident lookup achieved */
+#define	FLAGS_DOID	0x40000	/* I-lines say must use ident return */
+#define	FLAGS_NONL	0x80000 /* No \n in buffer */
 
 #define	SEND_UMODES	(FLAGS_INVISIBLE|FLAGS_OPER|FLAGS_WALLOP)
 #define	ALL_UMODES	(SEND_UMODES|FLAGS_SERVNOTICE)
@@ -155,7 +166,7 @@ typedef	struct	SMode	Mode;
 #define	IsInvisible(x)		((x)->flags & FLAGS_INVISIBLE)
 #define	IsAnOper(x)		((x)->flags & (FLAGS_OPER|FLAGS_LOCOP))
 #define	IsPerson(x)		IsClient(x)
-#define	IsPrivileged(x)		(IsOper(x) || IsServer(x))
+#define	IsPrivileged(x)		(IsAnOper(x) || IsServer(x))
 #define	SendWallops(x)		((x)->flags & FLAGS_WALLOP)
 #define	SendServNotice(x)	((x)->flags & FLAGS_SERVNOTICE)
 #define	IsUnixSocket(x)		((x)->flags & FLAGS_UNIX)
@@ -172,6 +183,7 @@ typedef	struct	SMode	Mode;
 #define	DoingDNS(x)		((x)->flags & FLAGS_DOINGDNS)
 #define	SetAccess(x)		((x)->flags |= FLAGS_CHKACCESS)
 #define	DoingAuth(x)		((x)->flags & FLAGS_AUTH)
+#define	NoNewLine(x)		((x)->flags & FLAGS_NONL)
 
 #define	ClearOper(x)		((x)->flags &= ~FLAGS_OPER)
 #define	ClearInvisible(x)	((x)->flags &= ~FLAGS_INVISIBLE)
@@ -233,10 +245,10 @@ struct	ConfItem	{
 #define	CONF_LISTEN_PORT	0x2000
 #define	CONF_HUB		0x4000
 
+#define	CONF_OPS		(CONF_OPERATOR | CONF_LOCOP)
 #define	CONF_SERVER_MASK	(CONF_CONNECT_SERVER | CONF_NOCONNECT_SERVER)
-#define	CONF_CLIENT_MASK	(CONF_CLIENT | CONF_CONNECT_SERVER | \
-				 CONF_LOCOP | CONF_NOCONNECT_SERVER | \
-				 CONF_OPERATOR | CONF_SERVICE)
+#define	CONF_CLIENT_MASK	(CONF_CLIENT | CONF_SERVICE | CONF_OPS | \
+				 CONF_SERVER_MASK)
 
 #define	IsIllegal(x)	((x)->status & CONF_ILLEGAL)
 
@@ -268,6 +280,7 @@ struct	Server	{
 	anUser	*user;		/* who activated this connection */
 	char	up[HOSTLEN+1];	/* uplink for this server */
 	char	by[NICKLEN+1];
+	aConfItem *nline;	/* N-line pointer for this server */
 };
 
 struct Client	{
@@ -279,7 +292,7 @@ struct Client	{
 #endif
 	time_t	lasttime;	/* ...should be only LOCAL clients? --msa */
 	time_t	firsttime;	/* time client was created */
-	time_t	since;		/* When this client entry was created */
+	time_t	since;		/* last time we parsed something */
 	long	flags;		/* client flags */
 	aClient	*from;		/* == self, if Local Client, *NEVER* NULL! */
 	int	fd;		/* >= 0, for local clients */
@@ -344,6 +357,8 @@ struct	stats {
 	unsigned int	is_fake; /* MODE 'fakes' */
 	unsigned int	is_asuc; /* successful auth requests */
 	unsigned int	is_abad; /* bad auth requests */
+	unsigned int	is_udp;	/* packets recv'd on udp port */
+	unsigned int	is_loc;	/* local connections made */
 };
 
 /* mode structure for channels */
@@ -401,6 +416,7 @@ struct Channel	{
 
 #define	CHFL_CHANOP     0x0001 /* Channel operator */
 #define	CHFL_VOICE      0x0002 /* the power to speak */
+#define	CHFL_BAN	0x0004 /* ban channel flag */
 
 /* Channel Visibility macros */
 
@@ -423,8 +439,8 @@ struct Channel	{
 /*
  * Undefined here, these are used in conjunction with the above modes in
  * the source.
-#define	MODE_DEL       0x40000000
-#define	MODE_ADD       0x80000000
+#define	MODE_DEL       0x20000000
+#define	MODE_ADD       0x40000000
  */
 
 #define	HoldChannel(x)		(!(x))
@@ -460,8 +476,8 @@ struct Channel	{
 /* used in SetMode() in channel.c and m_umode() in s_msg.c */
 
 #define	MODE_NULL      0
-#define	MODE_ADD       0x80000000
-#define	MODE_DEL       0x40000000
+#define	MODE_ADD       0x40000000
+#define	MODE_DEL       0x20000000
 
 /* return values for hunt_server() */
 
@@ -510,3 +526,5 @@ typedef	struct	Ignore {
 #define	HEADERLEN	200
 
 #endif
+
+#endif /* __struct_include__ */

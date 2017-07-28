@@ -23,7 +23,7 @@
  */
 
 #ifndef lint
-static  char sccsid[] = "@(#)parse.c	2.17 3/29/93 (C) 1988 University of Oulu, \
+static  char sccsid[] = "@(#)parse.c	2.25 6/21/93 (C) 1988 University of Oulu, \
 Computing Center and Jarkko Oikarinen";
 #endif
 #include "struct.h"
@@ -39,9 +39,12 @@ Computing Center and Jarkko Oikarinen";
  * NOTE: parse() should not be called recusively by other fucntions!
  */
 static	char	*para[MAXPARA+1];
+#ifndef	CLIENT_COMPILE
 static	int	cancel_clients PROTO((aClient *, aClient *));
+static	void	remove_unknown PROTO((aClient *, char *));
+#endif
 
-#ifdef CLIENT_COMPILE
+#ifdef	CLIENT_COMPILE
 static	char	sender[NICKLEN+USERLEN+HOSTLEN+3];
 char	userhost[USERLEN+HOSTLEN+2];
 #else
@@ -63,9 +66,9 @@ int	n;
 	    {
 		str1++; str2++; n--;
 		if (n == 0 || (*str1 == '\0' && *str2 == '\0'))
-			return(0);
+			return 0;
 	    }
-	return(1);
+	return (*str1 - *str2);
     }
 
 /*
@@ -88,11 +91,11 @@ char	*s2;
 #endif
 	    {
 		if (*str1 == '\0')
-			return(0);
+			return 0;
 		str1++;
 		str2++;
 	    }
-	return 1;
+	return (*str1 - *str2);
     }
 #endif
 
@@ -255,7 +258,7 @@ aClient *cptr;
 
 	c2ptr = find_client(name, c2ptr);
 
-	if (c2ptr != NULL && IsClient(c2ptr) && c2ptr->user)
+	if (c2ptr && IsClient(c2ptr) && c2ptr->user)
 		return c2ptr;
 	else
 		return cptr;
@@ -333,24 +336,14 @@ struct	Message *mptr;
 			 * (old IRC just let it through as if the
 			 * prefix just wasn't there...) --msa
 			 */
-			if (from == NULL)
+			if (!from)
 			    {
-				Debug((DEBUG_NOTICE,
-					"Unknown prefix (%s) from (%s)",
-					buffer, cptr->name));
+				Debug((DEBUG_ERROR,
+					"Unknown prefix (%s)(%s) from (%s)",
+					sender, buffer, cptr->name));
 				ircstp->is_unpf++;
 #ifndef	CLIENT_COMPILE
-				/*
-				 * Do kill if it came from a server because
-				 * it means there is a ghost user on the other
-				 * server which needs to be removed. -avalon
-				 */
-				sendto_ops("Killing Unknown prefix %s from %s",
-					sender, get_client_name(cptr, FALSE));
-				sendto_one(cptr,
-					":%s KILL %s :%s (%s(?) <- %s)",
-					me.name, sender, me.name, sender,
-					get_client_name(cptr, FALSE));
+				remove_unknown(cptr, sender);
 #endif
 				return -1;
 			    }
@@ -424,6 +417,8 @@ struct	Message *mptr;
 					    me.name, ERR_UNKNOWNCOMMAND,
 					    from->name, ch);
 #ifdef	CLIENT_COMPILE
+				Debug((DEBUG_ERROR,"Unknown (%s) from %s[%s]",
+					ch, cptr->name, cptr->sockhost));
 				/*
 				** This concerns only client ... --Armin
 				*/
@@ -431,6 +426,9 @@ struct	Message *mptr;
 					Debug((DEBUG_ERROR,
 						"*** Error: %s %s from server",
 						"Unknown command", ch));
+#else
+				Debug((DEBUG_ERROR,"Unknown (%s) from %s",
+					ch, get_client_name(cptr, TRUE)));
 #endif
 			    }
 			ircstp->is_unco++;
@@ -439,8 +437,8 @@ struct	Message *mptr;
 		paramcount = mptr->parameters;
 		i = bufend - ((s) ? s : ch);
 		mptr->bytes += i;
-		if ((mptr->flags & 1) && (!IsServer(cptr) && !IsService(cptr)))
-			cptr->since += i / 120;
+		if ((mptr->flags & 1) && !(IsServer(cptr) || IsService(cptr)))
+			cptr->since += (2 + i / 120);
 					/* Allow only 1 msg per 2 seconds
 					 * (on average) to prevent dumping.
 					 * to keep the response rate up,
@@ -547,14 +545,15 @@ aClient	*cptr, *sptr;
 	 * I'm not sure I've got this all right...
 	 * - avalon
 	 */
-	sendto_ops("Message for %s[%s] from %s",
-		   sptr->name, sptr->from->name, get_client_name(cptr, TRUE));
+	sendto_ops("Message for %s[%s!%s@%s] from %s",
+		   sptr->name, sptr->from->name, sptr->from->username,
+		   sptr->from->sockhost, get_client_name(cptr, TRUE));
 	/*
 	 * Incorrect prefix for a server from some connection.  If it is a
 	 * client trying to be annoying, just QUIT them, if it is a server
 	 * then the same deal.
 	 */
-	if (IsServer(sptr))
+	if (IsServer(sptr) || IsMe(sptr))
 		return exit_client(cptr, cptr, &me, "Fake Direction");
 	/*
 	 * Ok, someone is trying to impose as a client and things are
@@ -568,8 +567,32 @@ aClient	*cptr, *sptr;
 				   sptr->name, sptr->from->name,
 				   get_client_name(cptr, TRUE));
 		sptr->flags |= FLAGS_KILLED;
-		return exit_client(sptr, sptr, &me, "Fake Prefix");
+		return exit_client(cptr, sptr, &me, "Fake Prefix");
 	    }
 	return exit_client(cptr, cptr, &me, "Fake prefix");
+}
+
+static	void	remove_unknown(cptr, sender)
+aClient	*cptr;
+char	*sender;
+{
+	if (!IsRegistered(cptr) || IsClient(cptr))
+		return;
+	/*
+	 * Not from a server so don't need to worry about it.
+	 */
+	if (!IsServer(cptr))
+		return;
+	/*
+	 * Do kill if it came from a server because it means there is a ghost
+	 * user on the other server which needs to be removed. -avalon
+	 */
+	if (!index(sender, '.'))
+		sendto_one(cptr, ":%s KILL %s :%s (%s(?) <- %s)",
+			   me.name, sender, me.name, sender,
+			   get_client_name(cptr, FALSE));
+	else
+		sendto_one(cptr, ":%s SQUIT %s :(Unknown from %s)",
+			   me.name, sender, get_client_name(cptr, FALSE));
 }
 #endif
