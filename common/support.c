@@ -18,7 +18,7 @@
  */
 
 #ifndef lint
-static  char rcsid[] = "@(#)$Id: support.c,v 1.9 1997/09/23 15:36:20 kalt Exp $";
+static  char rcsid[] = "@(#)$Id: support.c,v 1.14 1998/08/03 14:09:17 kalt Exp $";
 #endif
 
 #include "os.h"
@@ -54,7 +54,7 @@ char	*s;
 **			of separators
 **			argv 9/90
 **
-**	$Id: support.c,v 1.9 1997/09/23 15:36:20 kalt Exp $
+**	$Id: support.c,v 1.14 1998/08/03 14:09:17 kalt Exp $
 */
 
 char *strtoken(save, str, fs)
@@ -108,7 +108,7 @@ char *str, *fs;
 **	strerror - return an appropriate system error string to a given errno
 **
 **		   argv 11/90
-**	$Id: support.c,v 1.9 1997/09/23 15:36:20 kalt Exp $
+**	$Id: support.c,v 1.14 1998/08/03 14:09:17 kalt Exp $
 */
 
 char *strerror(err_no)
@@ -129,6 +129,31 @@ int err_no;
 
 #endif /* HAVE_STRERROR */
 
+/**
+ ** myctime()
+ **   This is like standard ctime()-function, but it zaps away
+ **   the newline from the end of that string. Also, it takes
+ **   the time value as parameter, instead of pointer to it.
+ **   Note that it is necessary to copy the string to alternate
+ **   buffer (who knows how ctime() implements it, maybe it statically
+ **   has newline there and never 'refreshes' it -- zapping that
+ **   might break things in other places...)
+ **
+ **/
+
+char	*myctime(value)
+time_t	value;
+{
+	static	char	buf[28];
+	Reg	char	*p;
+
+	(void)strcpy(buf, ctime(&value));
+	if ((p = (char *)index(buf, '\n')) != NULL)
+		*p = '\0';
+
+	return buf;
+}
+
 #if ! HAVE_INET_NTOA
 /*
 **	inetntoa  --	changed name to remove collision possibility and
@@ -138,7 +163,7 @@ int err_no;
 **			internet number (some ULTRIX don't have this)
 **			argv 11/90).
 **	inet_ntoa --	its broken on some Ultrix/Dynix too. -avalon
-**	$Id: support.c,v 1.9 1997/09/23 15:36:20 kalt Exp $
+**	$Id: support.c,v 1.14 1998/08/03 14:09:17 kalt Exp $
 */
 
 char	*inetntoa(in)
@@ -711,15 +736,37 @@ char *make_version()
 	char ver[15];
 
 	sscanf(PATCHLEVEL, "%2d%2d%2d%2d%2d", &ve, &re, &mi, &dv, &pl);
-	sprintf(ver, "%d.%d", ve, re);	/* version & revision */
-	if (mi)	/* minor revision */
-		sprintf(ver + strlen(ver), ".%d", dv ? mi+1 : mi);
+	/* version & revision */
+	sprintf(ver, "%d.%d", ve, (mi == 99) ? re + 1 : re);
+	if (mi == 99) mi = -1;
+	/* minor revision */
+	sprintf(ver + strlen(ver), ".%d", dv ? mi+1 : mi);
 	if (dv)	/* alpha/beta, note how visual patchlevel is raised above */
 		sprintf(ver + strlen(ver), "%c%d", DEVLEVEL, dv);
 	if (pl)	/* patchlevel */
 		sprintf(ver + strlen(ver), "p%d", pl);
 	return mystrdup(ver);
 }
+
+#ifndef HAVE_TRUNCATE
+/* truncate: set a file to a specified length
+ * I don't know of any UNIX that doesn't have truncate, but CYGWIN32 beta18
+ * doesn't have it.  -krys
+ * Replacement version from Dave Miller.
+ */
+int truncate(path, length)
+const char *path;
+off_t length;
+{
+	int fd, res;
+	fd = open(path, O_WRONLY);
+	if (fd == -1)
+		return -1;
+	res = ftruncate(fd, length);
+	close(fd);
+	return res;
+}
+#endif /* HAVE_TRUNCATE */
 
 #if SOLARIS_2_3
 /* 
